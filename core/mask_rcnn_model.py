@@ -4,6 +4,8 @@ from core.cfg import cfg
 import core.utils as utils
 import math
 import numpy as np
+from core.layers import DetectionTargetLayer
+
 
 class Mask_RCNN:
     def __init__(self, mode, input_rpn_match, input_rpn_bbox):
@@ -14,10 +16,10 @@ class Mask_RCNN:
         self.mode = mode
         self.input_rpn_match = input_rpn_match
         self.input_rpn_bbox = input_rpn_bbox
-        self.batch_size=cfg.BATCH_SIZE
-        self.num_class=2
+        self.batch_size = cfg.BATCH_SIZE
+        self.num_class = 2
 
-    def build(self, input_image):  # 构建Mask R-CNN架构
+    def build(self, input_image, input_gt_class_ids, gt_boxes, input_gt_masks):  # 构建Mask R-CNN架构
         input_image = tf.identity(input_image, name='input_image_layer')
         # 检查尺寸合法性
         h, w = cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM
@@ -30,7 +32,9 @@ class Mask_RCNN:
             # input_rpn_bbox = tf.placeholder(shape=[None, 4], name="input_rpn_bbox", dtype=tf.float32)
             # 下面获得检测GT（class_id,bounding boxes,mask）
             # input_gt_class_ids = tf.placeholder(shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+            # <editor-fold desc="Description">
             # 2. GT Boxes in pixels (zero padded)
+            # </editor-fold>
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
             # input_gt_boxes = tf.placeholder(
             #     shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
@@ -78,52 +82,47 @@ class Mask_RCNN:
             # and zero padded.
             # 需要保留ROI的个数
             proposal_count = cfg.POST_NMS_ROIS_TRAINING
-            anchors=self.get_anchors([cfg.IMAGE_MAX_DIM, cfg.IMAGE_MAX_DIM, 3])#在一张图上画出众多候选框
-            anchors=np.broadcast_to(anchors,(self.batch_size,) + anchors.shape)
+            anchors = self.get_anchors([cfg.IMAGE_MAX_DIM, cfg.IMAGE_MAX_DIM, 3])  # 在一张图上画出众多候选框
+            anchors = np.broadcast_to(anchors, (self.batch_size,) + anchors.shape)
             anchors = tf.convert_to_tensor(anchors)
 
             # 下一步进入roi筛选，返回nms去重后，前景分数最大的n个ROI,这里roi坐标取值实在0-1
             rpn_rois = net.ProposalLayer(proposal_count=proposal_count,
-                              nms_threshold=cfg.RPN_NMS_THRESHOLD,
-                              batch_size=self.batch_size)([rpn_class_probs, rpn_bbox, anchors])
+                                         nms_threshold=cfg.RPN_NMS_THRESHOLD,
+                                         batch_size=self.batch_size)([rpn_class_probs, rpn_bbox, anchors])
             # =======================================================================
             # fpn网络对rpn_rois区域与特征数据 mrcnn_feature_maps进行计算。识别出分类、边框和掩码
 
-            #前面有个inference过程，但先不做，只做训练部分
+            # 前面有个inference过程，但先不做，只做训练部分
 
-            #训练模式下，获得输入数据的类
-            active_class_ids = tf.placeholder(dtype=tf.int32,shape=[None,self.num_class],name='acivate_class_ids')
+            # 训练模式下，获得输入数据的类
+            # active_class_ids = tf.placeholder(dtype=tf.int32, shape=[None, self.num_class], name='acivate_class_ids')
 
-            #正常训练模式
-            target_rois =rpn_rois
-            #根据输入的样本，制作RPN网络的标签
-            DetectionTargetLayer()
+            # 正常训练模式
+            target_rois = rpn_rois
+            # 根据输入的样本，制作RPN网络的标签
+            DetectionTargetLayer(batch_size=self.batch_size, name='mrcnn_detection').detect(
+                [target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
         return rpn_rois
 
-
-
     def get_anchors(self, image_shape):
         '''根据指定图片大小生成锚点.输入为原图尺寸'''
-        backbone_shapes=self.compute_backbone_shapes(image_shape)
+        backbone_shapes = self.compute_backbone_shapes(image_shape)
         # 缓存锚点
-        if not hasattr(self, "_anchor_cache"):#用来判断是否存在某个属性。现在没有就给建立一个self属性
+        if not hasattr(self, "_anchor_cache"):  # 用来判断是否存在某个属性。现在没有就给建立一个self属性
             self._anchor_cache = {}
         if not tuple(image_shape) in self._anchor_cache:
-            #生成锚点(这里坐标值得范围是0-1024)
+            # 生成锚点(这里坐标值得范围是0-1024)
             a = utils.generate_pyramid_anchors(cfg.RPN_ANCHOR_SCALES, cfg.RPN_ANCHOR_RATIOS,
                                                backbone_shapes, cfg.BACKBONE_STRIDES, cfg.RPN_ANCHOR_STRIDE)
             self.anchors = a
             # 设为标准坐标(转化后坐标值取值范围为0-1)
             self._anchor_cache[tuple(image_shape)] = utils.norm_boxes(a, image_shape[:2])
-        return self._anchor_cache[tuple(image_shape)]#现在这里的坐标值是归一化的，还有负值
+        return self._anchor_cache[tuple(image_shape)]  # 现在这里的坐标值是归一化的，还有负值
 
-
-    def compute_backbone_shapes(self,image_shape):
+    def compute_backbone_shapes(self, image_shape):
         '''计算主干网络返回的形状'''
         return_shape = [[int(math.ceil(image_shape[0] / stride)), int(math.ceil(image_shape[1] / stride))] for stride in
                         cfg.BACKBONE_STRIDES]
         return np.array(return_shape)
-
-
-

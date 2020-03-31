@@ -124,3 +124,8 @@ def batch_slice(inputs, graph_fn, batch_size, names=None):
         result = result[0]
 
     return result
+
+def visible(img):
+    plt.figure(figsize=(6, 6))
+    plt.imshow(img)
+    plt.show()

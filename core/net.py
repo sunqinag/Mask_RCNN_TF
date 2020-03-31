@@ -261,7 +261,7 @@ class ProposalLayer:
 
         # Non-max suppression算法
         def NMS(boxes,scores):
-            indices = tf.image.non_max_suppreossion(boxes,scores,self.proposal_count,
+            indices = tf.image.non_max_suppression(boxes,scores,self.proposal_count,
                                                    self.nms_threshold,name='rpn_non_max_suppression')#计算nms，并获得索引
             proposal = tf.gather(boxes,indices)#在boxes中取出indices索引所指的值
             # 如果proposals的个数小于proposal_count，剩下的补0
