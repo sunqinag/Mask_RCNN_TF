@@ -101,7 +101,7 @@ class Mask_RCNN:
             # 正常训练模式
             target_rois = rpn_rois
             # 根据输入的样本，制作RPN网络的标签
-            DetectionTargetLayer(batch_size=self.batch_size, name='mrcnn_detection').detect(
+            DetectionTargetLayer(batch_size=self.batch_size, name='mrcnn_detection')(
                 [target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
         return rpn_rois

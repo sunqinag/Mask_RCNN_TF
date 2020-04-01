@@ -75,14 +75,14 @@ def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride):
 def norm_boxes(boxes, shape):
     """
     将像素坐标转化为标注化坐标.
-    boxes: [N, (y1, x1, y2, x2)] in pixel coordinates
+    boxes: [N, (y1, x1, y2, x2)] in pixel coordinates，取值0-image_size
     shape: [..., (height, width)] in pixels
 
     Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
     coordinates it's inside the box.
 
     Returns:
-        [N, (y1, x1, y2, x2)] in normalized coordinates
+        [N, (y1, x1, y2, x2)] in normalized coordinates 取值0-1
     """
     h, w = shape
     scale = np.array([h - 1, w - 1, h - 1, w - 1])
@@ -99,7 +99,7 @@ def batch_slice(inputs, graph_fn, batch_size, names=None):
         inputs: list of tensors. All must have the same first dimension length
         graph_fn: A function that returns a TF tensor that's part of a graph.
         batch_size: number of slices to divide the data into.
-        names: If provided, assigns names to the resulting tensors.
+        names: 如果给出，长度应跟输入对应，每个tensor对应一个name
         """
     if not isinstance(inputs, list):
         inputs = [inputs]

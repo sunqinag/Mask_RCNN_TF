@@ -5,14 +5,17 @@ from core.mask_rcnn_model import Mask_RCNN
 from core.dataset import Dataset
 import matplotlib.pyplot as plt
 
-# tf.enable_eager_execution()
+tf.enable_eager_execution()
 
 rpn_visualize_dir = 'rpn_feature_image'
 
 # input_image = tf.placeholder(dtype=tf.float32, shape=[None, None, None, 3])
-dataset = Dataset('val', r'E:\Pycharm_project\mask_rcnn_TF\voc\val')
+dataset = Dataset(mode='val', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\val', tfrecord_folder='',
+                      data_reload=True)
 input_image, input_boxes, input_masks, input_class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
 
+
+input_image = tf.convert_to_tensor(input_image)
 # 调试模式
 # image = tf.convert_to_tensor(image)
 # image = tf.cast(image, tf.float32)
