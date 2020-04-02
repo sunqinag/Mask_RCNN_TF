@@ -207,8 +207,8 @@ def apply_box_deltas_graph(boxes,  # [N, (y1, x1, y2, x2)]
 
 def clip_boxes_graph(boxes,  # 计算完的box[N, (y1, x1, y2, x2)]
                      window):  ##y1, x1, y2, x2[0, 0, 1, 1]
-    wy1, wx1, wy2, wx2 = tf.split(window,4)
-    y1, x1, y2, x2 = tf.split(boxes, 4,axis=1)
+    wy1, wx1, wy2, wx2 = tf.split(window, 4)
+    y1, x1, y2, x2 = tf.split(boxes, 4, axis=1)
     # clip
     y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
     x1 = tf.maximum(tf.minimum(x1, wx2), wx1)
@@ -260,16 +260,60 @@ class ProposalLayer:
                                   names=["refined_anchors_clipped"])
 
         # Non-max suppression算法
-        def NMS(boxes,scores):
-            indices = tf.image.non_max_suppression(boxes,scores,self.proposal_count,
-                                                   self.nms_threshold,name='rpn_non_max_suppression')#计算nms，并获得索引
-            proposal = tf.gather(boxes,indices)#在boxes中取出indices索引所指的值
+        def NMS(boxes, scores):
+            indices = tf.image.non_max_suppression(boxes, scores, self.proposal_count,
+                                                   self.nms_threshold, name='rpn_non_max_suppression')  # 计算nms，并获得索引
+            proposal = tf.gather(boxes, indices)  # 在boxes中取出indices索引所指的值
             # 如果proposals的个数小于proposal_count，剩下的补0
-            padding = tf.maximum(self.proposal_count-tf.shape(proposal)[0],0)
-            proposal = tf.pad(proposal,[(0,padding),(0,0)])
+            padding = tf.maximum(self.proposal_count - tf.shape(proposal)[0], 0)
+            proposal = tf.pad(proposal, [(0, padding), (0, 0)])
             return proposal
-        proposal = utils.batch_slice([boxes,scores],NMS,self.batch_size)
+
+        proposal = utils.batch_slice([boxes, scores], NMS, self.batch_size)
         return proposal
 
 
+def fpn_classifier_graph(rois, feature_maps,
+                         pool_size, num_classes, batch_size, train_bn=True,
+                         fc_layers_size=1024):
+    # ROIAlign层 Shape: [batch, num_boxes, pool_height, pool_width, channels]
+    x = PyramidROIAlign(batch_size, [pool_size, pool_size],
+                        name="roi_align_classifier")([rois, feature_maps])
 
+
+class PyramidROIAlign:
+    def __init__(self, batch_size, pool_shape, **kwargs):
+        self.pool_shape = tuple(pool_shape)
+        self.batch_size = batch_size
+
+    def log2_graph(self, x):  # 计算log2
+        return tf.log(x) / tf.log(2.0)
+
+    def __call__(self, inputs):
+        '''
+        输入参数 Inputs:
+        -ROIboxes(RPN结果): [batch, num_boxes, 4]，4：(y1, x1, y2, x2)。nms后得锚点坐标.num_boxes=1000
+        - image_meta: [batch, (meta data)] 图片的附加信息 93
+        - Feature maps: [P2, P3, P4, P5]骨干网经过fpn后的特征.每个[batch, height, width, channels]
+        [(1, 256, 256, 256),(1, 128, 128, 256),(1, 64, 64, 256),(1, 32, 32, 256)]
+        '''
+        # 获取输入参数
+        ROIboxes = inputs[0]  # (1, 1000, 4)
+        feature_maps = inputs[2:]
+
+        # 将锚点坐标提出来
+        y1, x1, y2, x2 = tf.split(ROIboxes, 4, axis=2)  # [batch, num_boxes, 4]
+        h = y2 - y1
+        w = x2 - x1
+
+        ###############################在这1000个ROI里，按固定算法匹配到不同level的特征。
+        # 获得图片形状
+        image_shape = [cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM]
+        image_shape = tf.convert_to_tensor(image_shape)
+        image_area = tf.cast(image_shape[0] * image_shape[1], tf.float32)
+        # 因为h与w是标准化坐标。其分母已经被除了tf.sqrt(image_area)。
+        # 这里再除以tf.sqrt(image_area)分之1，是为了变为像素坐标
+        roi_level = self.log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
+        roi_level = tf.minimum(5, tf.maximum(2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
+        roi_level = tf.squeeze(roi_level, 2)
+        d = 0

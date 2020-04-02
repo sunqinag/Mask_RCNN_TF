@@ -17,7 +17,7 @@ class Mask_RCNN:
         self.input_rpn_match = input_rpn_match
         self.input_rpn_bbox = input_rpn_bbox
         self.batch_size = cfg.BATCH_SIZE
-        self.num_class = 2
+        self.num_class = 21
 
     def build(self, input_image, input_gt_class_ids, gt_boxes, input_gt_masks):  # 构建Mask R-CNN架构
         input_image = tf.identity(input_image, name='input_image_layer')
@@ -90,6 +90,21 @@ class Mask_RCNN:
             rpn_rois = net.ProposalLayer(proposal_count=proposal_count,
                                          nms_threshold=cfg.RPN_NMS_THRESHOLD,
                                          batch_size=self.batch_size)([rpn_class_probs, rpn_bbox, anchors])
+
+            # import cv2, os
+            # def save_anchor(image,rpn_rois):
+            #     img_path = r'E:\Pycharm_project\Mask_RCNN\data\img\2007_000032.jpg'
+            #     img = cv2.imread(img_path, 1)
+            #     for i in range(rpn_rois.shape[1]):
+            #         box = rpn_rois[0, i, :]
+            #         p1 = (int(box[0]), int(box[1]))
+            #         p2 = (int(box[2]), int(box[3]))
+            #         im = cv2.rectangle(img, p1, p2, (0, 0, 255))
+            #         print('saving ' + r'E:\Pycharm_project\Mask_RCNN\anchor' + os.sep + str(i) + '.jpg')
+            #         cv2.imwrite(r'E:\Pycharm_project\Mask_RCNN\anchor' + os.sep + str(i) + '.jpg', im)
+            #     return im
+            # val = tf.py_func(save_anchor, [input_image,rpn_rois], [tf.int32])
+
             # =======================================================================
             # fpn网络对rpn_rois区域与特征数据 mrcnn_feature_maps进行计算。识别出分类、边框和掩码
 
@@ -101,10 +116,16 @@ class Mask_RCNN:
             # 正常训练模式
             target_rois = rpn_rois
             # 根据输入的样本，制作RPN网络的标签
-            DetectionTargetLayer(batch_size=self.batch_size, name='mrcnn_detection')(
+            rois, target_class_ids, target_bbox, target_mask=DetectionTargetLayer(batch_size=self.batch_size, name='mrcnn_detection')(
                 [target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
-        return rpn_rois
+            #分类器
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = net.fpn_classifier_graph(rois, mrcnn_feature_maps,
+                                                                               cfg.POOL_SIZE, self.num_class,
+                                                                               self.batch_size, train_bn=False,  # 不用bn
+                                                                               fc_layers_size=1024)  # 全连接层1024个节点
+            d=0
+
 
     def get_anchors(self, image_shape):
         '''根据指定图片大小生成锚点.输入为原图尺寸'''
@@ -126,3 +147,6 @@ class Mask_RCNN:
         return_shape = [[int(math.ceil(image_shape[0] / stride)), int(math.ceil(image_shape[1] / stride))] for stride in
                         cfg.BACKBONE_STRIDES]
         return np.array(return_shape)
+
+
+

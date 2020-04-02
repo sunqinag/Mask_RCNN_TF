@@ -38,8 +38,8 @@ from distutils.version import LooseVersion
 assert LooseVersion(tf.__version__) >= LooseVersion("1.8")
 
 #定义全局输入图片大小（二选一）,图片会被下采样6次。必须能够被2的6次方整除
-IMAGE_MIN_DIM = 128
-IMAGE_MAX_DIM = 128
+IMAGE_MIN_DIM = 1024
+IMAGE_MAX_DIM = 1024
 #每个锚点的边长初始值
 RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128) 
 
@@ -256,7 +256,7 @@ class MaskRCNN():    #内部封装的keras_model为真正模型
         self.batch_size = batch_size
         self.model_dir = model_dir
         self.set_log_dir()
-        self.keras_model = self.build(mode=mode)
+        # self.keras_model = self.build(mode=mode)
         
     def mold_inputs(self, images):#输入图片预处理
         molded_images = []
@@ -290,14 +290,14 @@ class MaskRCNN():    #内部封装的keras_model为真正模型
         
         return molded_images, image_metas, windows
 
-    def build(self, mode):#构建Mask R-CNN架构
+    def build(self, input_image, input_gt_class_ids, input_gt_boxes, input_gt_masks,mode='training'):#构建Mask R-CNN架构
 
         #检查尺寸合法性
         h, w = IMAGE_DIM,IMAGE_DIM;
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("必须要被2的6次方整除.例如： 256, 320, 384, 448, 512, ... etc. ")
          
-        input_image = KL.Input( shape=[None, None, 3], name="input_image")#定义输入节点
+        # input_image = KL.Input( shape=[None, None, 3], name="input_image")#定义输入节点
         
         if mode == "inference":
             input_anchors = KL.Input(shape=[None, 4], name="input_anchors")#将全局的锚点框输入
@@ -309,25 +309,25 @@ class MaskRCNN():    #内部封装的keras_model为真正模型
 
             # Detection GT (class IDs, bounding boxes, and masks)
             # 1. GT Class IDs (zero padded)
-            input_gt_class_ids = KL.Input(
-                shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+            # input_gt_class_ids = KL.Input(
+            #     shape=[None], name="input_gt_class_ids", dtype=tf.int32)
             # 2. GT Boxes in pixels (zero padded)
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
-            input_gt_boxes = KL.Input(
-                shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
+            # input_gt_boxes = KL.Input(
+            #     shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
             # Normalize coordinates
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
             # 3. GT Masks (zero padded)
             # [batch, height, width, MAX_GT_INSTANCES]
-            if USE_MINI_MASK:
-                input_gt_masks = KL.Input(
-                    shape=[MINI_MASK_SHAPE[0],
-                           MINI_MASK_SHAPE[1], None],
-                    name="input_gt_masks", dtype=bool)
-            else:
-                input_gt_masks = KL.Input(shape=[IMAGE_DIM, IMAGE_DIM, None],
-                    name="input_gt_masks", dtype=bool)    
+            # if USE_MINI_MASK:
+            #     input_gt_masks = KL.Input(
+            #         shape=[MINI_MASK_SHAPE[0],
+            #                MINI_MASK_SHAPE[1], None],
+            #         name="input_gt_masks", dtype=bool)
+            # else:
+            #     input_gt_masks = KL.Input(shape=[IMAGE_DIM, IMAGE_DIM, None],
+            #         name="input_gt_masks", dtype=bool)
 
         # Build the shared convolutional layers.
         # Bottom-up Layers
@@ -404,6 +404,7 @@ class MaskRCNN():    #内部封装的keras_model为真正模型
         #返回nms去重后，前景分数最大的n个ROI
         rpn_rois = ProposalLayer(proposal_count=proposal_count, nms_threshold=RPN_NMS_THRESHOLD,batch_size=self.batch_size,
                                  name="ROI")([rpn_class, rpn_bbox, anchors])
+
 ###################################################
         #下面数字意义：image_id=1 original_image_shape=3 image_shape=3 坐标=4 缩放=1
         img_meta_size = 1 + 3 + 3 + 4 + 1 + self.num_class 		#定义图片附加信息
@@ -1681,6 +1682,7 @@ def data_generator(dataset,  shuffle=True, augment=False, augmentation=None,
                                              BACKBONE_STRIDES,
                                              RPN_ANCHOR_STRIDE)
 
+
     # Keras requires a generator to run indefinitely.
     while True:
         try:
@@ -2069,12 +2071,10 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
     # Remove the extra dimension from masks.
     masks = tf.squeeze(masks, axis=3)
 
-    # Threshold mask pixels at 0.5 to have GT masks be 0 or 1 to use with
-    # binary cross entropy loss.
+    # Threshold mask pixels at 0.5 to have GT masks be 0 or 1 to use with binary cross entropy loss.
     masks = tf.round(masks)
 
-    # Append negative ROIs and pad bbox deltas and masks that
-    # are not used for negative ROIs with zeros.
+    # Append negative ROIs and pad bbox deltas and masks that are not used for negative ROIs with zeros.
     rois = tf.concat([positive_rois, negative_rois], axis=0)
     N = tf.shape(negative_rois)[0]
     P = tf.maximum(TRAIN_ROIS_PER_IMAGE - tf.shape(rois)[0], 0)

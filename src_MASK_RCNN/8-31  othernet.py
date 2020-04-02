@@ -141,6 +141,7 @@ class ProposalLayer(tf.keras.layers.Layer):#RPN最终处理层
         boxes = utils.batch_slice(boxes,lambda x: clip_boxes_graph(x, window), self.batch_size,
                                   names=["refined_anchors_clipped"])
 
+
         # Non-max suppression算法
         def nms(boxes, scores):
             indices = tf.image.non_max_suppression(boxes, scores, self.proposal_count,
@@ -183,10 +184,9 @@ class PyramidROIAlign(tf.keras.layers.Layer):
         [(1, 256, 256, 256),(1, 128, 128, 256),(1, 64, 64, 256),(1, 32, 32, 256)]
         '''
         #获取输入参数
-        ROIboxes = inputs[0]#(1, 1000, 4) 
+        ROIboxes = inputs[0]#(1, 1000, 4)
         image_meta = inputs[1]#(1, 93)
         feature_maps = inputs[2:]
-
         #将锚点坐标提出来
         y1, x1, y2, x2 = tf.split(ROIboxes, 4, axis=2)#[batch, num_boxes, 4]
         h = y2 - y1
