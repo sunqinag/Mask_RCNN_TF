@@ -316,4 +316,29 @@ class PyramidROIAlign:
         roi_level = self.log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
         roi_level = tf.minimum(5, tf.maximum(2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
         roi_level = tf.squeeze(roi_level, 2)
-        d = 0
+
+        # 每个roi按照自己的区域去对应的特征里截取内容，并resize成指定的7*7大小. P2 to P5.
+        pooled=[]
+        box_to_level=[]
+        for i,level in enumerate(range(2,6)):
+            # equal会返回一个true false的（1，1000），where返回其中为true的索引[[0,1],[0,4],,,[0,200]]
+            ix = tf.where(tf.equal(roi_level, level), name="ix")  # (828, 2)
+
+            # 在多维上建立索引取值[?,4](828, 4)
+            level_boxes=tf.gather_nd(ROIboxes,ix,name='ix')#函数原型,nd的意思是可以收集n dimension的tensor
+
+            # Box indices for crop_and_resize.
+            box_indices = tf.cast(ix[:, 0], tf.int32)#(828, )，【0，0，0，0，0，】如果批次为2，就是[000...111]
+
+            # Keep track of which box is mapped to which level
+            box_to_level.append(ix)
+
+            # 下面两个值，是ROIboxes中按照不同尺度划分好的索引，对于该尺度特征中的批次索引，不希望有变化。所以停止梯度
+            level_boxes = tf.stop_gradient(level_boxes)
+            box_indices = tf.stop_gradient(box_indices)
+
+            # 结果: [batch * num_boxes, pool_height, pool_width, channels]
+            # feature_maps [(1, 256, 256, 256),(1, 128, 128, 256),(1, 64, 64, 256),(1, 32, 32, 256)]
+            # box_indices一共level_boxes个。指定level_boxes中的第几个框，作用于feature_maps中的第几个图片
+            pooled.append(tf.image.crop_and_resize(
+                feature_maps[i], level_boxes, box_indices, self.pool_shape, method="bilinear"))
