@@ -14,7 +14,7 @@ cfg.RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128)
 #在训练过程中，将选取多少个ROI放到fpn层
 cfg.TRAIN_ROIS_PER_IMAGE = 32
 #BATCH_SIZE大小
-cfg.BATCH_SIZE=2
+cfg.BATCH_SIZE=3
 
 cfg.IMAGE_RESIZE_MODE = "square"#统一成IMAGE_MAX_DIM
 # 图片resize时，定义的最小的缩放范围.0代表不进行最小缩放范围限制

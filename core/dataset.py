@@ -10,6 +10,18 @@ IMAGE_SIZE = 512
 MAX_OBJ_NUM = 50
 ROI_SIZE = 56
 
+'''
+    输入尺寸应该为：
+    batch_images：【3,128,128,3】
+    batch_image_meta, 【3,16】
+    batch_rpn_match, 【3,4092,1】？？？？
+    batch_rpn_bbox, 【3,256,4】
+    batch_gt_class_ids, 【3,100】
+    batch_gt_boxes, 【3,100,4】
+    batch_gt_masks 【3,56,56,100】
+'''
+
+
 
 class Dataset:
     def __init__(self, mode, base_folder, tfrecord_folder, data_reload=True):
@@ -60,6 +72,10 @@ class Dataset:
         else:
             masks = np.concatenate([masks[:, :, :MAX_OBJ_NUM]], axis=2).astype(np.float32)
         return masks.tostring(), bbox[:, :4].tostring(), bbox[:, 4:].tostring()
+
+
+
+
 
     def create_tfrecord(self, tfrecord_name):
         '''

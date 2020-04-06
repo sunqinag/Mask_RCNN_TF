@@ -273,12 +273,71 @@ class ProposalLayer:
         return proposal
 
 
+# 语义分割
+def build_fpn_mask_graph(rois,  # 目标实物检测结果，标准坐标[batch, num_rois, (y1, x1, y2, x2)]
+                         feature_maps,  # 骨干网之后的fpn特征[P2, P3, P4, P5]
+                         pool_size, num_classes, batch_size, train_bn=True):
+    """
+    返回: Masks [batch, roi_count, height, width, num_classes]
+    """
+    # ROIAlign 最终统一池化的大小为14
+    # Shape: [batch, boxes, pool_height, pool_width, channels]
+    x = PyramidROIAlign(batch_size,[pool_size,pool_size],
+                        name='roi_align_mask')([rois, feature_maps])
+
+    # conv_layers
+    x = tf.layers.conv2d(x,256,(3,3),padding='same',name='mrcnn_mask_conv1')
+    x = tf.layers.batch_normalization(x,training=train_bn,name='mrcnn_mask_bn1')
+    x = tf.nn.relu(x)
+
+    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv2')
+    x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn2')
+    x = tf.nn.relu(x)
+
+    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv3')
+    x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn3')
+    x = tf.nn.relu(x)
+
+    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv4')
+    x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn4')
+    x = tf.nn.relu(x)#Tensor("Relu_10:0", shape=(?, 14, 14, 256), dtype=float32)
+
+
+    #使用反卷积上采样
+    x = tf.layers.conv2d_transpose(x,256,2,strides=(2,2),activation=tf.nn.relu,name='mrcnn_masj_deconv')
+
+    #用卷积代替全连接
+    x = tf.layers.conv2d(x,num_classes,1,strides=(1,1),activation=tf.nn.relu,name='mrcnn_mask')
+
+    return x
+
+
+
+
 def fpn_classifier_graph(rois, feature_maps,
                          pool_size, num_classes, batch_size, train_bn=True,
                          fc_layers_size=1024):
     # ROIAlign层 Shape: [batch, num_boxes, pool_height, pool_width, channels]
     x = PyramidROIAlign(batch_size, [pool_size, pool_size],
                         name="roi_align_classifier")([rois, feature_maps])
+    # 用卷积替代两个1024全连接网络
+    x = tf.layers.conv2d(x, fc_layers_size, pool_size, (pool_size, pool_size), padding='same', name='mrcnn_class_conv1')
+    x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_class_bn1')
+    x = tf.nn.relu(x)
+    # 1*1卷积，代替第二个全连接
+    x = tf.layers.conv2d(x, fc_layers_size, 1, name='mecnn_class_conv2')
+    x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_class_bn2')
+    shared = tf.nn.relu(x)
+
+    # 共享特征层用于计算分类和边框
+    mrcnn_class_logits = tf.layers.dense(shared, num_classes, name='mrcnn_class_logots')
+    mrcnn_probs = tf.nn.softmax(mrcnn_class_logits, name='mrcnn_probs')
+
+    # 计算边框坐标bbox（偏移量和所放量）
+    # [batch, boxes, num_classes * (dy, dx, log(dh), log(dw))]
+    x = tf.layers.dense(shared, num_classes * 4, activation=tf.nn.relu)
+    mrcnn_bbox = tf.reshape(x, [-1, num_classes, 4], name='mrcnn_box')
+    return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 
 
 class PyramidROIAlign:
@@ -299,7 +358,7 @@ class PyramidROIAlign:
         '''
         # 获取输入参数
         ROIboxes = inputs[0]  # (1, 1000, 4)
-        feature_maps = inputs[2:]
+        feature_maps = inputs[1]
 
         # 将锚点坐标提出来
         y1, x1, y2, x2 = tf.split(ROIboxes, 4, axis=2)  # [batch, num_boxes, 4]
@@ -311,6 +370,8 @@ class PyramidROIAlign:
         image_shape = [cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM]
         image_shape = tf.convert_to_tensor(image_shape)
         image_area = tf.cast(image_shape[0] * image_shape[1], tf.float32)
+        # 因为在生成anchor的时候计算公式会保持特征图尺寸与anchor尺寸之间的比例关系恒定，因而可以通过roi面积和特征图面积反推
+        # roi所在的层级关系
         # 因为h与w是标准化坐标。其分母已经被除了tf.sqrt(image_area)。
         # 这里再除以tf.sqrt(image_area)分之1，是为了变为像素坐标
         roi_level = self.log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
@@ -318,17 +379,17 @@ class PyramidROIAlign:
         roi_level = tf.squeeze(roi_level, 2)
 
         # 每个roi按照自己的区域去对应的特征里截取内容，并resize成指定的7*7大小. P2 to P5.
-        pooled=[]
-        box_to_level=[]
-        for i,level in enumerate(range(2,6)):
+        pooled = []
+        box_to_level = []
+        for i, level in enumerate(range(2, 6)):
             # equal会返回一个true false的（1，1000），where返回其中为true的索引[[0,1],[0,4],,,[0,200]]
             ix = tf.where(tf.equal(roi_level, level), name="ix")  # (828, 2)
 
             # 在多维上建立索引取值[?,4](828, 4)
-            level_boxes=tf.gather_nd(ROIboxes,ix,name='ix')#函数原型,nd的意思是可以收集n dimension的tensor
+            level_boxes = tf.gather_nd(ROIboxes, ix, name='ix')  # 函数原型,nd的意思是可以收集n dimension的tensor
 
             # Box indices for crop_and_resize.
-            box_indices = tf.cast(ix[:, 0], tf.int32)#(828, )，【0，0，0，0，0，】如果批次为2，就是[000...111]
+            box_indices = tf.cast(ix[:, 0], tf.int32)  # (828, )，【0，0，0，0，0，】如果批次为2，就是[000...111]
 
             # Keep track of which box is mapped to which level
             box_to_level.append(ix)
@@ -342,3 +403,23 @@ class PyramidROIAlign:
             # box_indices一共level_boxes个。指定level_boxes中的第几个框，作用于feature_maps中的第几个图片
             pooled.append(tf.image.crop_and_resize(
                 feature_maps[i], level_boxes, box_indices, self.pool_shape, method="bilinear"))
+
+        # 1000个roi都取到了对应的内容，将它们组合起来。( 1000, 7, 7, 256)
+        pooled = tf.concat(pooled, axis=0)  # 其中的顺序是按照level来的需要重新排列成原来ROIboxes顺序，因为roi也是通过range依次抽取组合成
+
+        # 重新排列成原来ROIboxes顺序
+        box_to_level = tf.concat(box_to_level, axis=0)  # 按照选取level的顺序
+        box_range = tf.expand_dims(tf.range(tf.shape(box_to_level)[0]), 1)
+        box_to_level = tf.concat([tf.cast(box_to_level, tf.int32), box_range], axis=1)  # [1000，3] 3([xi] range)
+        # 取出头两个批次+序号（1000个），每个值代表原始roi展开的索引了。
+        sorting_tensor = box_to_level[:, 0] * 100000 + box_to_level[:, 1]  # 保证一个批次在100000以内
+        ix = tf.nn.top_k(sorting_tensor, k=tf.shape(  # 按照索引排序，
+            box_to_level)[0]).indices[::-1]
+        ix = tf.gather(box_to_level[:, 2], ix)  # 将roi中的顺序对应到pooled中的索引取出来
+        pooled = tf.gather(pooled, ix)  # 按照索引从pooled中取出的框，就是原始顺序了。
+
+        # 加上批次维度，并返回
+        # pooled = tf.expand_dims(pooled, 0)  # 应该用reshape
+        # pooled = KL.Reshape([self.batch_size,-1, self.pool_shape, self.pool_shape, mask_rcnn_model.FPN_FEATURE], name="pooled")(pooled)
+        # pooled = tf.reshape(pooled, [self.batch_size,1000, self.pool_shape, self.pool_shape, mask_rcnn_model.FPN_FEATURE])
+        return pooled

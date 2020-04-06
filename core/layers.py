@@ -23,6 +23,7 @@ class DetectionTargetLayer():
             self.batch_size, names=names)
         return outputs
 
+
 def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
@@ -64,39 +65,43 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
     # them from training. A crowd box is given a negative class ID.
-    crowd_ix = tf.where(gt_class_ids < 0)[:, 0]
-    non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
-    crowd_boxes = tf.gather(gt_boxes, crowd_ix)
-    crowd_masks = tf.gather(gt_masks, crowd_ix, axis=2)
-    gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
-    gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
-    gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
+    crowd_ix = tf.where(gt_class_ids < 0)[:, 0]  # 找出gt_class_id中标签小于0的，应该找不到吧
+    non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]  # 找出gt_class_id中标签大于0的，应该全是吧
+    crowd_boxes = tf.gather(gt_boxes, crowd_ix)  # 取出标签中小于0类别对应的box
+    crowd_masks = tf.gather(gt_masks, crowd_ix, axis=2)  # 期初标签中小于0类别对应的mask
+    gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)  # 找出标签中大于0的类别标签
+    gt_boxes = tf.gather(gt_boxes, non_crowd_ix)  # 找出标签中大于0的列别标签对应的box
+    gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)  # 找出标签中大于0的列别标签对应的mask
 
+    # 计算rois和gt_boxes的IOU
     # Compute overlaps matrix [proposals, gt_boxes]
     overlaps = overlaps_graph(proposals, gt_boxes)
 
     # Compute overlaps with crowd boxes [anchors, crowds]
-    crowd_overlaps = overlaps_graph(proposals, crowd_boxes)
+    # overlaps_graph返回【2000，n】n为类别数量
+    crowd_overlaps = overlaps_graph(proposals, crowd_boxes)  # 计算roi同小于0类别的标签对应的box的Iou
     crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
     no_crowd_bool = (crowd_iou_max < 0.001)
 
     # Determine positive and negative ROIs
-    roi_iou_max = tf.reduce_max(overlaps, axis=1)
+    roi_iou_max = tf.reduce_max(overlaps, axis=1)  # 找出各个类别中iou最大的值
     # 1. Positive ROIs are those with >= 0.5 IoU with a GT box
     positive_roi_bool = (roi_iou_max >= 0.5)
     positive_indices = tf.where(positive_roi_bool)[:, 0]
     # 2. Negative ROIs are those with < 0.5 with every GT box. Skip crowds.
-    negative_indices = tf.where(tf.logical_and(roi_iou_max < 0.5, no_crowd_bool))[:, 0]
+    negative_indices = tf.where(tf.logical_and(roi_iou_max < 0.5, no_crowd_bool))[:, 0]  # 当iou<0.5并且它的gt类别值不为负数的时候取出
 
     # Subsample ROIs. Aim for 33% positive
-    # Positive ROIs
+    # Positive ROIs numpy转tensor的一个小窍门
     positive_count = int(cfg.TRAIN_ROIS_PER_IMAGE * cfg.ROI_POSITIVE_RATIO)
-    positive_indices = tf.random_shuffle(positive_indices)[:positive_count]
+    positive_indices = tf.random_shuffle(positive_indices)[:positive_count]  # 随机抽取一部分正样本
     positive_count = tf.shape(positive_indices)[0]
     # Negative ROIs. Add enough to maintain positive:negative ratio.
     r = 1.0 / cfg.ROI_POSITIVE_RATIO
     negative_count = tf.cast(r * tf.cast(positive_count, tf.float32), tf.int32) - positive_count
     negative_indices = tf.random_shuffle(negative_indices)[:negative_count]
+
+    # 具体label产生流程
     # Gather selected ROIs
     positive_rois = tf.gather(proposals, positive_indices)
     negative_rois = tf.gather(proposals, negative_indices)
@@ -105,27 +110,33 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
     positive_overlaps = tf.gather(overlaps, positive_indices)
     roi_gt_box_assignment = tf.cond(
         tf.greater(tf.shape(positive_overlaps)[1], 0),
-        true_fn = lambda: tf.argmax(positive_overlaps, axis=1),
-        false_fn = lambda: tf.cast(tf.constant([]),tf.int64)
+        true_fn=lambda: tf.argmax(positive_overlaps, axis=1),  # 返回行或列最大值的索引
+        false_fn=lambda: tf.cast(tf.constant([]), tf.int64)
     )
     roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
     roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
 
     # Compute bbox refinement for positive ROIs
+    # 对于roi_gt_boxes和positive_rois将用于计算偏移量deltas，其中deltas作为对应roi的回归标签
     deltas = box_refinement_graph(positive_rois, roi_gt_boxes)
-    deltas /=cfg.BBOX_STD_DEV
+    deltas /= cfg.BBOX_STD_DEV
 
     # Assign positive ROIs to GT masks
     # Permute masks to [N, height, width, 1]
     transposed_masks = tf.expand_dims(tf.transpose(gt_masks, [2, 0, 1]), -1)
-    # Pick the right mask for each ROI
+    # 根据positive_rois在原始mask上截取训练用 的target_mask标签，其中mask作为对应roi的target_mask标签。注意不是直接用gt_boxes去全图mask上截取，而是用预测的positive_rois截取全图的mask，然后resize到28*28，这样mask分支才能正常训练，否则gt_masks的位置根本不对。(这里感谢知友
+    # @mxxsneaker
+    #  的提醒，并参考了博文mask rcnn解读 - Sundrops的专栏 - CSDN博客)。
     roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
 
     # Compute mask targets
+    # 计算target_mask
+    # (1)boxes置为positive_rois，即正样本推荐框
     boxes = positive_rois
     if cfg.USE_MINI_MASK:
-        # Transform ROI coordinates from normalized image space
-        # to normalized mini-mask space.
+        # 如果采用mini_mask,则需要在这里将positive_rois转换到roi_gt_boxes的范围内,
+        # 因为mini_mask仅仅记录了gt_boxes内部的mask信息
+        # 正如作者解释注释的＂We store mask pixels that are inside the object bounding box,
         y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
         gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
         gt_h = gt_y2 - gt_y1
@@ -136,7 +147,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
         x2 = (x2 - gt_x1) / gt_w
         boxes = tf.concat([y1, x1, y2, x2], 1)
     box_ids = tf.range(0, tf.shape(roi_masks)[0])
-    masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes, box_ids,cfg.MASK_SHAPE)
+    masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes, box_ids, cfg.MASK_SHAPE)
     # Remove the extra dimension from masks.
     masks = tf.squeeze(masks, axis=3)
 
@@ -156,7 +167,6 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
     masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
 
     return rois, roi_gt_class_ids, deltas, masks
-
 
 
 # def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
@@ -289,7 +299,6 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks):
 #     return rois, roi_gt_class_ids, deltas, masks
 
 
-
 def box_refinement_graph(box, gt_box):
     """
     Compute refinement needed to transform box to gt_box.
@@ -315,7 +324,6 @@ def box_refinement_graph(box, gt_box):
 
     result = tf.stack([dy, dx, dh, dw], axis=1)
     return result
-
 
 
 def overlaps_graph(boxes1, boxes2):
@@ -347,7 +355,7 @@ def overlaps_graph(boxes1, boxes2):
 
     # Compute IoU and reshape to [boxes1, boxes2]
     iou = intersection / union
-    overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])
+    overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])#对应关系，这个iou是box1的第几个对应的box2的第几个
     return overlaps
 
     # import matplotlib.pyplot as plt
@@ -360,7 +368,6 @@ def overlaps_graph(boxes1, boxes2):
     #     plt.title('used tf.gather')
     #     plt.imshow(gt_masks[:,:,i])
     # plt.show()
-
 
 
 def trim_zeros_graph(boxes, name=None):

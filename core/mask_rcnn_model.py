@@ -4,7 +4,7 @@ from core.cfg import cfg
 import core.utils as utils
 import math
 import numpy as np
-from core.layers import DetectionTargetLayer
+from core.layers import DetectionTargetLayer, overlaps_graph
 
 
 class Mask_RCNN:
@@ -19,7 +19,7 @@ class Mask_RCNN:
         self.batch_size = cfg.BATCH_SIZE
         self.num_class = 21
 
-    def build(self, input_image, input_gt_class_ids, gt_boxes, input_gt_masks):  # 构建Mask R-CNN架构
+    def build(self, input_image, input_gt_class_ids, input_gt_box, input_gt_masks):  # 构建Mask R-CNN架构
         input_image = tf.identity(input_image, name='input_image_layer')
         # 检查尺寸合法性
         h, w = cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM
@@ -116,16 +116,97 @@ class Mask_RCNN:
             # 正常训练模式
             target_rois = rpn_rois
             # 根据输入的样本，制作RPN网络的标签
-            rois, target_class_ids, target_bbox, target_mask=DetectionTargetLayer(batch_size=self.batch_size, name='mrcnn_detection')(
-                [target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            rois, target_class_ids, target_bbox, target_mask = DetectionTargetLayer(batch_size=self.batch_size,
+                                                                                    name='mrcnn_detection')(
+                [target_rois, input_gt_class_ids, input_gt_box, input_gt_masks])
 
-            #分类器
+            # 分类器
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox = net.fpn_classifier_graph(rois, mrcnn_feature_maps,
-                                                                               cfg.POOL_SIZE, self.num_class,
-                                                                               self.batch_size, train_bn=False,  # 不用bn
-                                                                               fc_layers_size=1024)  # 全连接层1024个节点
-            d=0
+                                                                                   cfg.POOL_SIZE, self.num_class,
+                                                                                   self.batch_size, train_bn=False,
+                                                                                   # 不用bn
+                                                                                   fc_layers_size=1024)  # 全连接层1024个节点
+            # 进行语义分割，掩码预测
+            mrcnn_mask = net.build_fpn_mask_graph(rois, mrcnn_feature_maps,
+                                                  cfg.MASK_POOL_SIZE, self.num_class, self.batch_size, train_bn=False)
+            for i in range(self.batch_size):
+                self.build_rpn_targets(anchors=anchors[i, :, :], gt_class_ids=input_gt_class_ids[i, :],
+                                       gt_boxes=input_gt_box[i, :, :])
+            d = 0
 
+    def build_rpn_targets(self, anchors, gt_class_ids, gt_boxes):
+        '''
+        给定锚点和GT框，计算重叠并确定正值
+        锚点和三角洲以优化它们以匹配其相应的GT_box
+
+        anchors: [num_anchors, (y1, x1, y2, x2)]
+        gt_class_ids: [num_gt_boxes] Integer class IDs.
+        gt_boxes: [num_gt_boxes, (y1, x1, y2, x2)]
+
+        Returns:
+        rpn_match: [N] (int32) matches between anchors and GT boxes.
+                   1 = positive anchor, -1 = negative anchor, 0 = neutral（iou在0.3和0.7之间）
+        rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
+        '''
+
+        # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
+        rpn_match = tf.zeros([anchors.shape[0]])
+
+        # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
+        # 其实rpn_bbox可以砍掉一般。因为只有放了一半的正锚点
+        rpn_box = tf.zeros([cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4])
+
+        # A crowd box is given a negative class ID.
+        crowd_ix = tf.where(gt_class_ids < 0)[:, 0]
+        if crowd_ix.shape[0] > 0:
+            # Filter out crowds from ground truth class IDs and boxes
+            non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
+            crowd_box = tf.gather(gt_boxes, crowd_ix)
+
+            gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
+            gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
+
+            # Compute overlaps with crowd boxes [anchors, crowds]
+            crowd_overlaps = overlaps_graph(anchors, crowd_box)
+            crowd_iou_max = tf.argmax(crowd_overlaps)
+            no_corwd_bool = (crowd_iou_max < 0.001)
+        else:
+            # All anchors don't intersect a crowd
+            non_crowd_bool = tf.ones([anchors.shape[0]], dtype=tf.bool)
+
+        # Compute overlaps [num_anchors, num_gt_boxes]  每个值都是面积重叠的比例
+        overlaps = overlaps_graph(anchors, gt_boxes)
+        # 将锚点匹配到GT Boxes
+        # 如果锚与IoU> = 0.7的GT框重叠，则为正。
+        # 如果锚点与IoU <0.3的GT框重叠，则为负。
+        # 中性锚是指不符合上述条件的锚，
+        # 而且它们不会影响损失函数。
+        # 但是，不要让任何GT_box都无匹配项（稀有，但是会发生）。
+        # 相应的，
+        # 使它与最接近的锚点匹配（即使其最大IoU <0.3）。
+
+        # 1.首先设置负样本anchor。 如果GT_box是与他们匹配。 跳过corwd_box。
+        anchor_iou_argmax = tf.argmax(overlaps, axis=1)
+        rpn_match[
+            (tf.cast(anchor_iou_argmax, tf.float32) < 0.3) & (non_crowd_bool)] = -1  # 将Iou《0.3的设为-1,同时要保证gt的label值要大于0
+
+        # 为每一个gt_box设置一个锚点，无论IoU的值如何，
+        # If multiple anchors have the same IoU match all of them
+        gt_iou_argmax = tf.argmax(overlaps, axis=0)
+        rpn_match[gt_iou_argmax] = 1  # 有n个gt_box,这必定对应4个与他们iou值最大的anchor，将这些anchor设置为1
+        # 3.将重叠度较高的锚定为正。
+        rpn_match[tf.cast(anchor_iou_argmax, tf.float32) >= 0.7] = 1  # 将Iou>= 0.7的设为
+
+        # 要么充分重叠，要么不充分重叠。介于二者之间都为0
+        # 总共256个正负锚点框，正负锚点超过半数的随机将其去掉
+        ids = tf.where(rpn_match == 1)[:, 0]
+        extra = tf.cast(ids, tf.int32) - (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE // 2)
+        if extra > 0:
+            # 将多余的重置为中性
+            choice = tf.range(ids.shape[0])
+
+            ids == 0
+        d = 0
 
     def get_anchors(self, image_shape):
         '''根据指定图片大小生成锚点.输入为原图尺寸'''
@@ -147,6 +228,3 @@ class Mask_RCNN:
         return_shape = [[int(math.ceil(image_shape[0] / stride)), int(math.ceil(image_shape[1] / stride))] for stride in
                         cfg.BACKBONE_STRIDES]
         return np.array(return_shape)
-
-
-
