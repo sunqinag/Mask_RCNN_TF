@@ -1,8 +1,10 @@
 import os
 import cv2
+import math
 import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
+from core.cfg import cfg
 
 from diabetic_package.file_operator import bz_path
 
@@ -22,9 +24,8 @@ ROI_SIZE = 56
 '''
 
 
-
 class Dataset:
-    def __init__(self, mode, base_folder, tfrecord_folder, data_reload=True):
+    def __init__(self, mode, base_folder, tfrecord_folder, data_reload=True, use_numpy_style=False):
         self.mode = mode
         self.base_folder = base_folder
         img_dir = self.base_folder + os.sep + 'imgs'
@@ -32,13 +33,19 @@ class Dataset:
         self.img_list = sorted(bz_path.get_file_path(img_dir, ret_full_path=True))
         self.label_list = sorted(bz_path.get_file_path(label_dir, ret_full_path=True))
         self.tfrecord_name = tfrecord_folder + os.sep + str(self.mode) + '.tfrecords'
-        if data_reload:
-            self.image, self.boxes, self.masks, self.class_ids = self.load_tfrecord(self.tfrecord_name)
+        if use_numpy_style:
+            generator = self.create_dataset_numpy(
+                image_list=self.img_list, label_list=self.label_list,
+                batch_size=cfg.BATCH_SIZE)
+            self.batch_image, self.batch_mask, self.batch_bbox, self.batch_class_ids = next(generator)
         else:
-            self.create_tfrecord(self.tfrecord_name)
-            self.image, self.boxes, self.masks, self.class_ids = self.load_tfrecord(self.tfrecord_name)
+            if data_reload:
+                self.image, self.boxes, self.masks, self.class_ids = self.load_tfrecord(self.tfrecord_name)
+            else:
+                self.create_tfrecord(self.tfrecord_name)
+                self.image, self.boxes, self.masks, self.class_ids = self.load_tfrecord(self.tfrecord_name)
 
-    def get_single_mask(self, src_label):
+    def get_single_mask(self, src_label, use_tf_style=True):
         '''
         将一个多类别的二值图抓化成多个单类别的二值图，组成一个高维矩阵
         :param src_label:原始二值图label
@@ -71,11 +78,46 @@ class Dataset:
             masks = np.concatenate([masks, pad_mask], axis=2).astype(np.float32)
         else:
             masks = np.concatenate([masks[:, :, :MAX_OBJ_NUM]], axis=2).astype(np.float32)
-        return masks.tostring(), bbox[:, :4].tostring(), bbox[:, 4:].tostring()
+        if use_tf_style:
+            return masks.tostring(), bbox[:, :4].tostring(), bbox[:, 4:].tostring()
+        else:
+            return masks, bbox[:, :4], bbox[:, 4:]
 
+    def create_dataset_numpy(self, image_list, label_list, batch_size):
+        lists = np.vstack([image_list, label_list])
 
+        num_batch = math.ceil(len(lists) / batch_size)  # 确定每轮有多少个batch
+        for i in range(num_batch):
+            if (i == 0):
+                np.random.shuffle(lists)
+            batch_list = lists[:, i * batch_size: i * batch_size + batch_size]
+            np.random.shuffle(batch_list)
+            batch_image_path = np.array([image_path for image_path in batch_list[1, :]])
+            batch_label_path = np.array([label_path for label_path in batch_list[0, :]])
+            batch_image = []
+            batch_bbox = []
+            batch_mask = []
+            batch_class_ids = []
+            for j in range(batch_size):
+                image = cv2.imread(batch_image_path[j], 1)
+                image = cv2.resize(image, (cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM))
+                label = cv2.imread(batch_label_path[j], 0)
+                label = cv2.resize(label, (cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM))
+                masks, bbox, class_ids = self.get_single_mask(label, use_tf_style=False)
+                batch_image.append(image.astype(np.float32))
+                batch_bbox.append(bbox.astype(np.float32))
+                batch_mask.append(masks.astype(np.float32))
+                batch_class_ids.append(class_ids.astype(np.float32))
 
-
+            batch_image = np.stack(batch_image)
+            print('batch_image shape:', batch_image.shape)
+            batch_mask = np.stack(batch_mask)
+            print('batch_mask shape', batch_mask.shape)
+            batch_bbox = np.stack(batch_bbox)
+            print('batch_bbox shape', batch_bbox.shape)
+            batch_class_ids = np.stack(batch_class_ids)
+            print('batch_class_ids shape', batch_class_ids.shape)
+            yield batch_image, batch_mask, batch_bbox, batch_class_ids
 
     def create_tfrecord(self, tfrecord_name):
         '''
@@ -87,7 +129,7 @@ class Dataset:
         '''
         # 定义writer,用于向tfrecord写入数据
         write = tf.python_io.TFRecordWriter(tfrecord_name)
-        print('生成tfrecord，存放于：',tfrecord_name)
+        print('生成tfrecord，存放于：', tfrecord_name)
         for i in tqdm(range(len(self.img_list))):
             img = cv2.imread(self.img_list[i], 1)
             img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
@@ -148,14 +190,15 @@ if __name__ == '__main__':
 
     dataset = Dataset(mode='val', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\val',
                       tfrecord_folder=r'E:\Pycharm_project\mask_rcnn_TF\data',
-                      data_reload=False)
-    image, boxes, masks, class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        i = 0
-        while True:
-            i += 1
-            # 顺序获取数据，打印输出
-            im, bo, ma, class_id = sess.run([image, boxes, masks, class_ids])
-            d=0
-            print(i, im, bo, ma)
+                      data_reload=False,
+                      use_numpy_style=True)
+    # image, boxes, masks, class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
+    # with tf.Session() as sess:
+    #     sess.run(tf.global_variables_initializer())
+    #     i = 0
+    #     while True:
+    #         i += 1
+    #         # 顺序获取数据，打印输出
+    #         im, bo, ma, class_id = sess.run([image, boxes, masks, class_ids])
+    #         d = 0
+    #         print(i, im, bo, ma)

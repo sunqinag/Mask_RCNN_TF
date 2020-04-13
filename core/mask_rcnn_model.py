@@ -150,7 +150,7 @@ class Mask_RCNN:
         '''
 
         # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
-        rpn_match = tf.zeros([anchors.shape[0]])
+        rpn_match = tf.Variable(tf.zeros([anchors.shape[0]]))#这里经过了修改否则rpn_match是常亮后面无法更改了
 
         # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
         # 其实rpn_bbox可以砍掉一般。因为只有放了一半的正锚点
@@ -169,7 +169,7 @@ class Mask_RCNN:
             # Compute overlaps with crowd boxes [anchors, crowds]
             crowd_overlaps = overlaps_graph(anchors, crowd_box)
             crowd_iou_max = tf.argmax(crowd_overlaps)
-            no_corwd_bool = (crowd_iou_max < 0.001)
+            non_corwd_bool = (crowd_iou_max < 0.001)
         else:
             # All anchors don't intersect a crowd
             non_crowd_bool = tf.ones([anchors.shape[0]], dtype=tf.bool)
@@ -188,7 +188,9 @@ class Mask_RCNN:
         # 1.首先设置负样本anchor。 如果GT_box是与他们匹配。 跳过corwd_box。
         anchor_iou_argmax = tf.argmax(overlaps, axis=1)
         rpn_match[
-            (tf.cast(anchor_iou_argmax, tf.float32) < 0.3) & (non_crowd_bool)] = -1  # 将Iou《0.3的设为-1,同时要保证gt的label值要大于0
+            (tf.cast(anchor_iou_argmax, tf.float32) < 0.3) & (non_crowd_bool)]=-1 # 将Iou《0.3的设为-1,同时要保证gt的label值要大于0
+
+
 
         # 为每一个gt_box设置一个锚点，无论IoU的值如何，
         # If multiple anchors have the same IoU match all of them

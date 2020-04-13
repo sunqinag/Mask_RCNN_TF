@@ -9,11 +9,9 @@ import matplotlib.pyplot as plt
 
 rpn_visualize_dir = 'rpn_feature_image'
 
-dataset = Dataset(mode='val', base_folder=r'D:\Pycharm_Project\Mask_RCNN_TF\voc\val',
-                  tfrecord_folder=r'D:\Pycharm_Project\Mask_RCNN_TF\data')
-input_image, input_boxes, input_masks, input_class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
-
-# input_image = tf.convert_to_tensor(input_image)
+dataset = Dataset(mode='val', base_folder='voc/val',
+                  tfrecord_folder='data',use_numpy_style=True)
+input_image,input_class_ids,input_boxes,input_masks=dataset.batch_image,dataset.batch_class_ids,dataset.batch_bbox,dataset.batch_mask
 # 调试模式
 # image = tf.convert_to_tensor(image)
 # image = tf.cast(image, tf.float32)

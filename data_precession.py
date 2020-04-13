@@ -3,11 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def visible(img):
-    plt.figure(figsize=(6, 6))
-    plt.imshow(img)
-    plt.show()
-
 
 # def get_single_mask(src_label):
 #     '''
