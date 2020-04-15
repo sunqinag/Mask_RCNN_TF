@@ -116,6 +116,7 @@ class Dataset:
             batch_bbox = np.stack(batch_bbox)
             print('batch_bbox shape', batch_bbox.shape)
             batch_class_ids = np.stack(batch_class_ids)
+            batch_class_ids = np.squeeze(batch_class_ids)
             print('batch_class_ids shape', batch_class_ids.shape)
             yield batch_image, batch_mask, batch_bbox, batch_class_ids
 
@@ -186,12 +187,16 @@ class Dataset:
 
 
 if __name__ == '__main__':
-    from core.utils import visible
 
-    dataset = Dataset(mode='val', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\val',
+    import time
+    start = time.time()
+    dataset = Dataset(mode='train', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\train',
                       tfrecord_folder=r'E:\Pycharm_project\mask_rcnn_TF\data',
                       data_reload=False,
-                      use_numpy_style=True)
+                      use_numpy_style=False)
+    end =time.time()
+    print('using time:',end-start)
+
     # image, boxes, masks, class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
     # with tf.Session() as sess:
     #     sess.run(tf.global_variables_initializer())

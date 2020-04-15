@@ -8,6 +8,8 @@ cfg=_C
 #定义全局输入图片大小（二选一）,图片会被下采样6次。必须能够被2的6次方整除
 cfg.IMAGE_MIN_DIM = 512
 cfg.IMAGE_MAX_DIM = 512
+
+cfg.IMAGE_DIM = 512
 #每个锚点的边长初始值
 cfg.RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128)
 
