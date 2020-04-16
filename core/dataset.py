@@ -5,12 +5,10 @@ import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
 from core.cfg import cfg
+from core.mask_rcnn_model import generate_rpn_match_and_rpn_bbox
 
 from diabetic_package.file_operator import bz_path
 
-IMAGE_SIZE = 512
-MAX_OBJ_NUM = 50
-ROI_SIZE = 56
 
 '''
     输入尺寸应该为：
@@ -27,6 +25,7 @@ ROI_SIZE = 56
 class Dataset:
     def __init__(self, mode, base_folder, tfrecord_folder, data_reload=True, use_numpy_style=False):
         self.mode = mode
+        self.class_num=21
         self.base_folder = base_folder
         img_dir = self.base_folder + os.sep + 'imgs'
         label_dir = self.base_folder + os.sep + 'labels'
@@ -40,10 +39,12 @@ class Dataset:
             self.batch_image, self.batch_mask, self.batch_bbox, self.batch_class_ids = next(generator)
         else:
             if data_reload:
-                self.image, self.boxes, self.masks, self.class_ids = self.load_tfrecord(self.tfrecord_name)
+                self.image, self.boxes, self.masks, self.class_ids, self.rpn_match, self.rpn_bbox,self.activate_ids = self.load_tfrecord(
+                    self.tfrecord_name)
             else:
                 self.create_tfrecord(self.tfrecord_name)
-                self.image, self.boxes, self.masks, self.class_ids = self.load_tfrecord(self.tfrecord_name)
+                self.image, self.boxes, self.masks, self.class_ids, self.rpn_match, self.rpn_bbox, self.activate_ids = self.load_tfrecord(
+                    self.tfrecord_name)
 
     def get_single_mask(self, src_label, use_tf_style=True):
         '''
@@ -53,9 +54,13 @@ class Dataset:
         '''
         image, contours, hierarchy = cv2.findContours(src_label, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
         masks = np.array([])
+        activate_ids = np.zeros(self.class_num)
         bbox = []
+        activate_class = np.unique(src_label)
+        activate_ids[activate_class]=1
+
         for i in range(0, len(contours)):
-            if contours[i].shape[0] >= MAX_OBJ_NUM:
+            if contours[i].shape[0] >= cfg.MAX_OBJ_NUM:
                 x, y, w, h = cv2.boundingRect(contours[i])
                 # src_img[int(y + h / 2), int(x + w / 2)] = 255
                 # print('corrd:', [int(x), int(y), int(x + w / 2), int(y + h / 2)])
@@ -63,25 +68,26 @@ class Dataset:
                 bbox.extend([int(x), int(y), int(x + w / 2), int(y + h / 2), label])
 
                 region = src_label[y:y + h + 1, x:x + w + 1]
-                region = cv2.resize(region, (ROI_SIZE, ROI_SIZE), interpolation=cv2.INTER_NEAREST)
+                region = cv2.resize(region, (cfg.MINI_MASK_SHAPE[0],cfg.MINI_MASK_SHAPE[1]), interpolation=cv2.INTER_NEAREST)
                 # visible(region)
                 mask = np.expand_dims(region, 2)
                 masks = np.append(masks, mask)
-        if len(bbox) < MAX_OBJ_NUM * 5:
-            bbox = bbox + [0, 0, 0, 0, 0] * (MAX_OBJ_NUM - int(len(bbox) / 5))
+
+        if len(bbox) < cfg.MAX_OBJ_NUM * 5:
+            bbox = bbox + [0, 0, 0, 0, 0] * (cfg.MAX_OBJ_NUM - int(len(bbox) / 5))
         else:
-            bbox = bbox[:MAX_OBJ_NUM * 5]
-        bbox = np.array(bbox).reshape((MAX_OBJ_NUM, 5)).astype(np.float32)
-        masks = np.reshape(masks, (ROI_SIZE, ROI_SIZE, -1))
-        if masks.shape[-1] < MAX_OBJ_NUM:
-            pad_mask = np.tile(np.zeros((ROI_SIZE, ROI_SIZE, 1)), (1, 1, (MAX_OBJ_NUM - masks.shape[-1])))
+            bbox = bbox[:cfg.MAX_OBJ_NUM * 5]
+        bbox = np.array(bbox).reshape((cfg.MAX_OBJ_NUM, 5)).astype(np.float32)
+        masks = np.reshape(masks, (cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], -1))
+        if masks.shape[-1] < cfg.MAX_OBJ_NUM:
+            pad_mask = np.tile(np.zeros((cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], 1)), (1, 1, (cfg.MAX_OBJ_NUM - masks.shape[-1])))
             masks = np.concatenate([masks, pad_mask], axis=2).astype(np.float32)
         else:
-            masks = np.concatenate([masks[:, :, :MAX_OBJ_NUM]], axis=2).astype(np.float32)
+            masks = np.concatenate([masks[:, :, :cfg.MAX_OBJ_NUM]], axis=2).astype(np.float32)
         if use_tf_style:
-            return masks.tostring(), bbox[:, :4].tostring(), bbox[:, 4:].tostring()
+            return masks, bbox[:, :4], bbox[:, 4:],activate_ids
         else:
-            return masks, bbox[:, :4], bbox[:, 4:]
+            return masks, bbox[:, :4], bbox[:, 4:],activate_ids
 
     def create_dataset_numpy(self, image_list, label_list, batch_size):
         lists = np.vstack([image_list, label_list])
@@ -133,10 +139,12 @@ class Dataset:
         print('生成tfrecord，存放于：', tfrecord_name)
         for i in tqdm(range(len(self.img_list))):
             img = cv2.imread(self.img_list[i], 1)
-            img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
+            img = cv2.resize(img, (cfg.IMAGE_DIM, cfg.IMAGE_DIM))
             full_scale_mask = cv2.imread(self.label_list[i], 0)
             # print(self.full_scale_mask_list[i])
-            masks, bbox, class_ids = self.get_single_mask(full_scale_mask)
+            masks, bbox, class_ids,activate_ids = self.get_single_mask(full_scale_mask)
+            # 获得rpn loss的gt
+            rpn_match, rpn_bbox = generate_rpn_match_and_rpn_bbox(class_ids, bbox)
 
             # 将图片转为二进制格式
             img = img.tobytes()
@@ -144,9 +152,12 @@ class Dataset:
             example = tf.train.Example(
                 features=tf.train.Features(feature={
                     'img_raw': tf.train.Feature(bytes_list=tf.train.BytesList(value=[img])),
-                    'masks': tf.train.Feature(bytes_list=tf.train.BytesList(value=[masks])),
-                    'bboxes': tf.train.Feature(bytes_list=tf.train.BytesList(value=[bbox])),
-                    'class_ids': tf.train.Feature(bytes_list=tf.train.BytesList(value=[class_ids]))
+                    'masks': tf.train.Feature(bytes_list=tf.train.BytesList(value=[masks.tostring()])),
+                    'bboxes': tf.train.Feature(bytes_list=tf.train.BytesList(value=[bbox.tostring()])),
+                    'class_ids': tf.train.Feature(bytes_list=tf.train.BytesList(value=[class_ids.tostring()])),
+                    'rpn_match': tf.train.Feature(bytes_list=tf.train.BytesList(value=[rpn_match.tostring()])),
+                    'rpn_bbox': tf.train.Feature(bytes_list=tf.train.BytesList(value=[rpn_bbox.tostring()])),
+                    'activate_ids': tf.train.Feature(bytes_list=tf.train.BytesList(value=[activate_ids.tostring()]))
                 })
             )
             write.write(example.SerializeToString())
@@ -159,20 +170,34 @@ class Dataset:
                                                'img_raw': tf.FixedLenFeature([], tf.string),
                                                'masks': tf.FixedLenFeature([], tf.string),
                                                'bboxes': tf.FixedLenFeature([], tf.string),
-                                               'class_ids': tf.FixedLenFeature([], tf.string)
+                                               'class_ids': tf.FixedLenFeature([], tf.string),
+                                               'rpn_match': tf.FixedLenFeature([], tf.string),
+                                               'rpn_bbox': tf.FixedLenFeature([], tf.string),
+                                               'activate_ids': tf.FixedLenFeature([], tf.string)
                                            })
         # 将字符串解析成对应的像素数组
         image = tf.decode_raw(features['img_raw'], tf.uint8)
         image = tf.cast(image, tf.float32)
-        image = tf.reshape(image, [IMAGE_SIZE, IMAGE_SIZE, 3])
+        image = tf.reshape(image, [cfg.IMAGE_DIM, cfg.IMAGE_DIM, 3])
+
         masks = tf.decode_raw(features['masks'], tf.float32)
-        print(tf.shape(masks))
-        masks = tf.reshape(masks, [ROI_SIZE, ROI_SIZE, MAX_OBJ_NUM])
+        masks = tf.reshape(masks, [cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], cfg.MAX_OBJ_NUM])
+
         boxes = tf.decode_raw(features['bboxes'], tf.float32)
-        boxes = tf.reshape(boxes, [MAX_OBJ_NUM, 4])
+        boxes = tf.reshape(boxes, [cfg.MAX_OBJ_NUM, 4])
+
         class_ids = tf.decode_raw(features['class_ids'], tf.float32)
-        class_ids = tf.reshape(class_ids, (MAX_OBJ_NUM,))
-        return image, boxes, masks, class_ids
+        class_ids = tf.reshape(class_ids, (cfg.MAX_OBJ_NUM,))
+
+        rpn_match = tf.decode_raw(features['rpn_match'], tf.float32)
+        rpn_match = tf.reshape(rpn_match, (-1,1))
+
+        rpn_bbox = tf.decode_raw(features['rpn_bbox'], tf.float32)
+        rpn_bbox = tf.reshape(rpn_bbox, (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE,4))
+
+        activate_ids = tf.decode_raw(features['activate_ids'], tf.float32)
+        # rpn_match = tf.reshape(rpn_match, (-1, 1))
+        return image, boxes, masks, class_ids, rpn_match, rpn_bbox,activate_ids
 
     def load_tfrecord(self, tfrecord_file):
         dataset = tf.data.TFRecordDataset(tfrecord_file)
@@ -182,20 +207,20 @@ class Dataset:
         dataset = dataset.repeat(100)
 
         iteror = dataset.make_one_shot_iterator()
-        image, boxes, masks, class_ids = iteror.get_next()
-        return image, boxes, masks, class_ids
+        image, boxes, masks, class_ids, rpn_match, rpn_bbox,activate_ids = iteror.get_next()
+        return image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids
 
 
 if __name__ == '__main__':
-
     import time
+
     start = time.time()
-    dataset = Dataset(mode='train', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\train',
+    dataset = Dataset(mode='val', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\val',
                       tfrecord_folder=r'E:\Pycharm_project\mask_rcnn_TF\data',
                       data_reload=False,
                       use_numpy_style=False)
-    end =time.time()
-    print('using time:',end-start)
+    end = time.time()
+    print('using time:', end - start)
 
     # image, boxes, masks, class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
     # with tf.Session() as sess:

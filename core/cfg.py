@@ -10,6 +10,12 @@ cfg.IMAGE_MIN_DIM = 512
 cfg.IMAGE_MAX_DIM = 512
 
 cfg.IMAGE_DIM = 512
+
+#一张图中最多有多少个目标
+cfg.MAX_OBJ_NUM=50
+
+
+
 #每个锚点的边长初始值
 cfg.RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128)
 

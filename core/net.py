@@ -40,120 +40,25 @@ def resnet(input_image, train_bn=True):
     return C1, C2, C3, C4, C5
 
 
-def rpn_layer_2(inpute_feature_map,  # 输入的特征，其w与h所围成面积的个数当作锚点的个数。
-                anchors_per_location,  # 每个待计算锚点的网格，需要划分几种形状的矩形
-                anchor_stride):  # 扫描网格的步长
+def rpn_layer(inpute_feature_map,  # 输入的特征，其w与h所围成面积的个数当作锚点的个数。
+              anchors_per_location,  # 每个待计算锚点的网格，需要划分几种形状的矩形
+              anchor_stride,
+              num):  # 扫描网格的步长
     # 通过一个卷积得到共享特征
     shared = tf.layers.conv2d(inputs=inpute_feature_map, filters=512, kernel_size=3, strides=anchor_stride,
-                              padding='same', activation=tf.nn.relu, name='rpn_conv_shared_2')
+                              padding='same', activation=tf.nn.relu, name='rpn_conv_shared_' + str(num))
     # 第一部分计算锚点的分数（前景和背景） [batch, height, width, anchors per location * 2].
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 2, kernel_size=3, activation=tf.nn.relu)
+    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 2, kernel_size=1, activation=tf.nn.relu)
 
     # 将feature_map展开，得到[batch, anchors, 2]。anchors=feature_map的h*w*anchors_per_location
     rpn_class_logits = tf.reshape(x, (tf.shape(x)[0], -1, 2))
 
     # 用Softmax来分类前景和背景BG/FG.结果当作分数
-    rpn_probs = tf.nn.softmax(rpn_class_logits, name='rpn_softmax_XXX_2')
+    rpn_probs = tf.nn.softmax(rpn_class_logits, name='rpn_softmax_XXX_' + str(num))
 
     # 第二部分计算锚点的边框，每个网格划分anchors_per_location种矩形框，每种4个坐标
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 4, kernel_size=3, activation=tf.nn.relu,
-                         name='rpn_bbox_pred_2')
-
-    # 将feature_map展开，得到[batch, anchors, 4]
-    rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4))
-    return [rpn_class_logits, rpn_probs, rpn_bbox]
-
-
-def rpn_layer_3(inpute_feature_map,  # 输入的特征，其w与h所围成面积的个数当作锚点的个数。
-                anchors_per_location,  # 每个待计算锚点的网格，需要划分几种形状的矩形
-                anchor_stride):  # 扫描网格的步长
-    # 通过一个卷积得到共享特征
-    shared = tf.layers.conv2d(inputs=inpute_feature_map, filters=512, kernel_size=3, strides=anchor_stride,
-                              padding='same', activation=tf.nn.relu, name='rpn_conv_shared_3')
-    # 第一部分计算锚点的分数（前景和背景） [batch, height, width, anchors per location * 2].
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 2, kernel_size=3, activation=tf.nn.relu)
-
-    # 将feature_map展开，得到[batch, anchors, 2]。anchors=feature_map的h*w*anchors_per_location
-    rpn_class_logits = tf.reshape(x, (tf.shape(x)[0], -1, 2))
-
-    # 用Softmax来分类前景和背景BG/FG.结果当作分数
-    rpn_probs = tf.nn.softmax(rpn_class_logits, name='rpn_softmax_XXX_3')
-
-    # 第二部分计算锚点的边框，每个网格划分anchors_per_location种矩形框，每种4个坐标
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 4, kernel_size=3, activation=tf.nn.relu,
-                         name='rpn_bbox_pred_3')
-
-    # 将feature_map展开，得到[batch, anchors, 4]
-    rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4))
-    return [rpn_class_logits, rpn_probs, rpn_bbox]
-
-
-def rpn_layer_4(inpute_feature_map,  # 输入的特征，其w与h所围成面积的个数当作锚点的个数。
-                anchors_per_location,  # 每个待计算锚点的网格，需要划分几种形状的矩形
-                anchor_stride):  # 扫描网格的步长
-    # 通过一个卷积得到共享特征
-    shared = tf.layers.conv2d(inputs=inpute_feature_map, filters=512, kernel_size=3, strides=anchor_stride,
-                              padding='same', activation=tf.nn.relu, name='rpn_conv_shared_4')
-    # 第一部分计算锚点的分数（前景和背景） [batch, height, width, anchors per location * 2].
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 2, kernel_size=3, activation=tf.nn.relu)
-
-    # 将feature_map展开，得到[batch, anchors, 2]。anchors=feature_map的h*w*anchors_per_location
-    rpn_class_logits = tf.reshape(x, (tf.shape(x)[0], -1, 2))
-
-    # 用Softmax来分类前景和背景BG/FG.结果当作分数
-    rpn_probs = tf.nn.softmax(rpn_class_logits, name='rpn_softmax_XXX_4')
-
-    # 第二部分计算锚点的边框，每个网格划分anchors_per_location种矩形框，每种4个坐标
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 4, kernel_size=3, activation=tf.nn.relu,
-                         name='rpn_bbox_pred_4')
-
-    # 将feature_map展开，得到[batch, anchors, 4]
-    rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4))
-    return [rpn_class_logits, rpn_probs, rpn_bbox]
-
-
-def rpn_layer_5(inpute_feature_map,  # 输入的特征，其w与h所围成面积的个数当作锚点的个数。
-                anchors_per_location,  # 每个待计算锚点的网格，需要划分几种形状的矩形
-                anchor_stride):  # 扫描网格的步长
-    # 通过一个卷积得到共享特征
-    shared = tf.layers.conv2d(inputs=inpute_feature_map, filters=512, kernel_size=3, strides=anchor_stride,
-                              padding='same', activation=tf.nn.relu, name='rpn_conv_shared_5')
-    # 第一部分计算锚点的分数（前景和背景） [batch, height, width, anchors per location * 2].
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 2, kernel_size=3, activation=tf.nn.relu)
-
-    # 将feature_map展开，得到[batch, anchors, 2]。anchors=feature_map的h*w*anchors_per_location
-    rpn_class_logits = tf.reshape(x, (tf.shape(x)[0], -1, 2))
-
-    # 用Softmax来分类前景和背景BG/FG.结果当作分数
-    rpn_probs = tf.nn.softmax(rpn_class_logits, name='rpn_softmax_XXX_5')
-
-    # 第二部分计算锚点的边框，每个网格划分anchors_per_location种矩形框，每种4个坐标
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 4, kernel_size=3, activation=tf.nn.relu,
-                         name='rpn_bbox_pred_5')
-
-    # 将feature_map展开，得到[batch, anchors, 4]
-    rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4))
-    return [rpn_class_logits, rpn_probs, rpn_bbox]
-
-
-def rpn_layer_6(inpute_feature_map,  # 输入的特征，其w与h所围成面积的个数当作锚点的个数。
-                anchors_per_location,  # 每个待计算锚点的网格，需要划分几种形状的矩形
-                anchor_stride):  # 扫描网格的步长
-    # 通过一个卷积得到共享特征
-    shared = tf.layers.conv2d(inputs=inpute_feature_map, filters=512, kernel_size=3, strides=anchor_stride,
-                              padding='same', activation=tf.nn.relu, name='rpn_conv_shared_6')
-    # 第一部分计算锚点的分数（前景和背景） [batch, height, width, anchors per location * 2].
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 2, kernel_size=3, activation=tf.nn.relu)
-
-    # 将feature_map展开，得到[batch, anchors, 2]。anchors=feature_map的h*w*anchors_per_location
-    rpn_class_logits = tf.reshape(x, (tf.shape(x)[0], -1, 2))
-
-    # 用Softmax来分类前景和背景BG/FG.结果当作分数
-    rpn_probs = tf.nn.softmax(rpn_class_logits, name='rpn_softmax_XXX_6')
-
-    # 第二部分计算锚点的边框，每个网格划分anchors_per_location种矩形框，每种4个坐标
-    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 4, kernel_size=3, activation=tf.nn.relu,
-                         name='rpn_bbox_pred_6')
+    x = tf.layers.conv2d(inputs=shared, filters=anchors_per_location * 4, kernel_size=1, activation=tf.nn.relu,
+                         name='rpn_bbox_pred_' + str(num))
 
     # 将feature_map展开，得到[batch, anchors, 4]
     rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4))
@@ -170,11 +75,11 @@ def build_rpn_layer(inpute_feature_map,  # 输入的特征，其w与h所围成�
     :param anchor_stride:
     :return:
     '''
-    out2 = rpn_layer_2(inpute_feature_map[0], anchors_per_location, anchor_stride)
-    out3 = rpn_layer_3(inpute_feature_map[1], anchors_per_location, anchor_stride)
-    out4 = rpn_layer_4(inpute_feature_map[2], anchors_per_location, anchor_stride)
-    out5 = rpn_layer_5(inpute_feature_map[3], anchors_per_location, anchor_stride)
-    out6 = rpn_layer_6(inpute_feature_map[4], anchors_per_location, anchor_stride)
+    out2 = rpn_layer(inpute_feature_map[0], anchors_per_location, anchor_stride, num=2)
+    out3 = rpn_layer(inpute_feature_map[1], anchors_per_location, anchor_stride, num=3)
+    out4 = rpn_layer(inpute_feature_map[2], anchors_per_location, anchor_stride, num=4)
+    out5 = rpn_layer(inpute_feature_map[3], anchors_per_location, anchor_stride, num=5)
+    out6 = rpn_layer(inpute_feature_map[4], anchors_per_location, anchor_stride, num=6)
     return [out2, out3, out4, out5, out6]
 
 
@@ -282,12 +187,12 @@ def build_fpn_mask_graph(rois,  # 目标实物检测结果，标准坐标[batch,
     """
     # ROIAlign 最终统一池化的大小为14
     # Shape: [batch, boxes, pool_height, pool_width, channels]
-    x = PyramidROIAlign(batch_size,[pool_size,pool_size],
+    x = PyramidROIAlign(batch_size, [pool_size, pool_size],
                         name='roi_align_mask')([rois, feature_maps])
 
     # conv_layers
-    x = tf.layers.conv2d(x,256,(3,3),padding='same',name='mrcnn_mask_conv1')
-    x = tf.layers.batch_normalization(x,training=train_bn,name='mrcnn_mask_bn1')
+    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv1')
+    x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn1')
     x = tf.nn.relu(x)
 
     x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv2')
@@ -300,18 +205,15 @@ def build_fpn_mask_graph(rois,  # 目标实物检测结果，标准坐标[batch,
 
     x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv4')
     x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn4')
-    x = tf.nn.relu(x)#Tensor("Relu_10:0", shape=(?, 14, 14, 256), dtype=float32)
+    x = tf.nn.relu(x)  # Tensor("Relu_10:0", shape=(?, 14, 14, 256), dtype=float32)
 
+    # 使用反卷积上采样
+    x = tf.layers.conv2d_transpose(x, 256, 2, strides=(2, 2), activation=tf.nn.relu, name='mrcnn_masj_deconv')
 
-    #使用反卷积上采样
-    x = tf.layers.conv2d_transpose(x,256,2,strides=(2,2),activation=tf.nn.relu,name='mrcnn_masj_deconv')
-
-    #用卷积代替全连接
-    x = tf.layers.conv2d(x,num_classes,1,strides=(1,1),activation=tf.nn.relu,name='mrcnn_mask')
+    # 用卷积代替全连接
+    x = tf.layers.conv2d(x, num_classes, 1, strides=(1, 1), activation=tf.nn.relu, name='mrcnn_mask')
 
     return x
-
-
 
 
 def fpn_classifier_graph(rois, feature_maps,

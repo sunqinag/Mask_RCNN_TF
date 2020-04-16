@@ -8,19 +8,19 @@ from core.layers import DetectionTargetLayer, overlaps_graph
 
 
 class Mask_RCNN:
-    def __init__(self, mode, input_rpn_match, input_rpn_bbox):
+    def __init__(self, mode):
         """
         mode: 可以是 "training" 或 "inference" 两种模式
         model_dir: 保存模型的路径
         """
         self.mode = mode
-        self.input_rpn_match = input_rpn_match
-        self.input_rpn_bbox = input_rpn_bbox
         self.batch_size = cfg.BATCH_SIZE
         self.num_class = 21
 
-    def build(self, input_image, input_gt_class_ids, input_gt_box, input_gt_masks):  # 构建Mask R-CNN架构
-        input_image = tf.identity(input_image, name='input_image_layer')
+    def build(self, input_image, input_gt_class_ids, input_gt_box, input_gt_masks,
+              input_gt_rpn_match, input_gt_rpn_bbox):  # 构建Mask R-CNN架构
+        # input_image = tf.identity(input_image, name='input_image_layer')
+        # input_image = tf.placeholder(shape=[None,cfg.IMAGE_MIN_DIM,cfg.IMAGE_MIN_DIM,3],name='input_image',dtype=tf.float32)
         # 检查尺寸合法性
         h, w = cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM
         if h / 2 ** 6 != int(h / 2 ** 6) or w / 2 ** 6 != int(w / 2 ** 6):
@@ -91,20 +91,6 @@ class Mask_RCNN:
                                          nms_threshold=cfg.RPN_NMS_THRESHOLD,
                                          batch_size=self.batch_size)([rpn_class_probs, rpn_bbox, anchors])
 
-            # import cv2, os
-            # def save_anchor(image,rpn_rois):
-            #     img_path = r'E:\Pycharm_project\Mask_RCNN\data\img\2007_000032.jpg'
-            #     img = cv2.imread(img_path, 1)
-            #     for i in range(rpn_rois.shape[1]):
-            #         box = rpn_rois[0, i, :]
-            #         p1 = (int(box[0]), int(box[1]))
-            #         p2 = (int(box[2]), int(box[3]))
-            #         im = cv2.rectangle(img, p1, p2, (0, 0, 255))
-            #         print('saving ' + r'E:\Pycharm_project\Mask_RCNN\anchor' + os.sep + str(i) + '.jpg')
-            #         cv2.imwrite(r'E:\Pycharm_project\Mask_RCNN\anchor' + os.sep + str(i) + '.jpg', im)
-            #     return im
-            # val = tf.py_func(save_anchor, [input_image,rpn_rois], [tf.int32])
-
             # =======================================================================
             # fpn网络对rpn_rois区域与特征数据 mrcnn_feature_maps进行计算。识别出分类、边框和掩码
 
@@ -129,93 +115,16 @@ class Mask_RCNN:
             # 进行语义分割，掩码预测
             mrcnn_mask = net.build_fpn_mask_graph(rois, mrcnn_feature_maps,
                                                   cfg.MASK_POOL_SIZE, self.num_class, self.batch_size, train_bn=False)
-            # for i in range(self.batch_size):
-            #     self.build_rpn_targets(anchors=anchors[i, :, :], gt_class_ids=input_gt_class_ids[i, :],
-            #                            gt_boxes=input_gt_box[i, :, :])
-            d = 0
+            # 计算loss
+            rpn_class_loss = rpn_class_loss_graph(input_gt_rpn_match, rpn_class_logits)
+            rpn_bbox_loss = rpn_bbox_loss_graph(cfg.BATCH_SIZE, input_gt_rpn_bbox, input_gt_rpn_match, rpn_bbox)
+            class_loss = mrcnn_class_loss_graph(self.num_class,target_class_ids, mrcnn_class_logits, input_gt_class_ids)
 
 
-
-
-    #     def build_rpn_targets(self, anchors, gt_class_ids, gt_boxes):
-#         '''
-#         给定锚点和GT框，计算重叠并确定正值
-#         锚点和三角洲以优化它们以匹配其相应的GT_box
-#
-#         anchors: [num_anchors, (y1, x1, y2, x2)]
-#         gt_class_ids: [num_gt_boxes] Integer class IDs.
-#         gt_boxes: [num_gt_boxes, (y1, x1, y2, x2)]
-#
-#         Returns:
-#         rpn_match: [N] (int32) matches between anchors and GT boxes.
-#                    1 = positive anchor, -1 = negative anchor, 0 = neutral（iou在0.3和0.7之间）
-#         rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
-#         '''
-#
-#         # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
-#         rpn_match = tf.Variable(tf.zeros([anchors.shape[0]]))#这里经过了修改否则rpn_match是常亮后面无法更改了
-#
-#         # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
-#         # 其实rpn_bbox可以砍掉一般。因为只有放了一半的正锚点
-#         rpn_box = tf.zeros([cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4])
-#
-#         # A crowd box is given a negative class ID.
-#         crowd_ix = tf.where(gt_class_ids < 0)[:, 0]
-#         if crowd_ix.shape[0] > 0:
-#             # Filter out crowds from ground truth class IDs and boxes
-#             non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
-#             crowd_box = tf.gather(gt_boxes, crowd_ix)
-#
-#             gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
-#             gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
-#
-#             # Compute overlaps with crowd boxes [anchors, crowds]
-#             crowd_overlaps = overlaps_graph(anchors, crowd_box)
-#             crowd_iou_max = tf.argmax(crowd_overlaps)
-#             non_corwd_bool = (crowd_iou_max < 0.001)
-#         else:
-#             # All anchors don't intersect a crowd
-#             non_crowd_bool = tf.ones([anchors.shape[0]], dtype=tf.bool)
-#
-#         # Compute overlaps [num_anchors, num_gt_boxes]  每个值都是面积重叠的比例
-#         overlaps = overlaps_graph(anchors, gt_boxes)
-#         # 将锚点匹配到GT Boxes
-#         # 如果锚与IoU> = 0.7的GT框重叠，则为正。
-#         # 如果锚点与IoU <0.3的GT框重叠，则为负。
-#         # 中性锚是指不符合上述条件的锚，
-#         # 而且它们不会影响损失函数。
-#         # 但是，不要让任何GT_box都无匹配项（稀有，但是会发生）。
-#         # 相应的，
-#         # 使它与最接近的锚点匹配（即使其最大IoU <0.3）。
-#
-#         # 1.首先设置负样本anchor。 如果GT_box是与他们匹配。 跳过corwd_box。
-#         anchor_iou_argmax = tf.argmax(overlaps, axis=1)
-#         rpn_match[
-#             (tf.cast(anchor_iou_argmax, tf.float32) < 0.3) & (non_crowd_bool)]=-1 # 将Iou《0.3的设为-1,同时要保证gt的label值要大于0
-#
-#
-#
-#         # 为每一个gt_box设置一个锚点，无论IoU的值如何，
-#         # If multiple anchors have the same IoU match all of them
-#         gt_iou_argmax = tf.argmax(overlaps, axis=0)
-#         rpn_match[gt_iou_argmax] = 1  # 有n个gt_box,这必定对应4个与他们iou值最大的anchor，将这些anchor设置为1
-#         # 3.将重叠度较高的锚定为正。
-#         rpn_match[tf.cast(anchor_iou_argmax, tf.float32) >= 0.7] = 1  # 将Iou>= 0.7的设为
-#
-#         # 要么充分重叠，要么不充分重叠。介于二者之间都为0
-#         # 总共256个正负锚点框，正负锚点超过半数的随机将其去掉
-#         ids = tf.where(rpn_match == 1)[:, 0]
-#         extra = tf.cast(ids, tf.int32) - (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE // 2)
-#         if extra > 0:
-#             # 将多余的重置为中性
-#             choice = tf.range(ids.shape[0])
-#
-#             ids == 0
-#         d = 0
 
     def get_anchors(self, image_shape):
         '''根据指定图片大小生成锚点.输入为原图尺寸'''
-        backbone_shapes = self.compute_backbone_shapes(image_shape)
+        backbone_shapes = compute_backbone_shapes(image_shape)
         # 缓存锚点
         if not hasattr(self, "_anchor_cache"):  # 用来判断是否存在某个属性。现在没有就给建立一个self属性
             self._anchor_cache = {}
@@ -229,6 +138,148 @@ class Mask_RCNN:
         return self._anchor_cache[tuple(image_shape)]  # 现在这里的坐标值是归一化的，还有负值
 
 
+def mrcnn_class_loss_graph(num_class, batch_size, target_class_ids, pred_class_logits,
+                           active_class_ids):
+    """Loss for the classifier head of Mask RCNN.
+
+    target_class_ids: [batch, num_rois]. Integer class IDs. Uses zero
+        padding to fill in the array.
+    pred_class_logits: [batch, num_rois, num_classes]
+    active_class_ids: [batch, num_classes]. Has a value of 1 for
+        classes that are in the dataset of the image, and 0
+        for classes that are not in the dataset.
+    """
+    # During model building, Keras calls this function with
+    # target_class_ids of type float32. Unclear why. Cast it
+    # to int to get around it.
+    target_class_ids = tf.cast(target_class_ids, 'int64')
+    print("pred_class_logits_________", pred_class_logits.get_shape())
+
+    pred_class_logits = tf.reshape(pred_class_logits, (batch_size, -1, num_class))
+    print("mrcnn_class_logits____", pred_class_logits.get_shape())
+
+    # Find predictions of classes that are not in the dataset.
+    pred_class_ids = tf.argmax(pred_class_logits, axis=2)
+    # TODO: Update this line to work with batch > 1. Right now it assumes all
+    #       images in a batch have the same active_class_ids
+    pred_active = tf.gather(active_class_ids[0], pred_class_ids)
+
+    # Loss
+    loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=target_class_ids, logits=pred_class_logits)
+
+    # Erase losses of predictions of classes that are not in the active
+    # classes of the image.
+    loss = loss * pred_active
+
+    # Computer loss mean. Use only predictions that contribute
+    # to the loss to get a correct mean.
+    loss = tf.reduce_sum(loss) / tf.reduce_sum(pred_active)
+    return loss
+
+
+
+
+def rpn_class_loss_graph(rpn_match, rpn_class_logits):
+    """RPN anchor classifier loss.
+
+    rpn_match: [batch, anchors, 1]. Anchor match type. 1=positive,
+               -1=negative, 0=neutral anchor.
+    rpn_class_logits: [batch, anchors, 2]. RPN classifier logits for FG/BG.
+    """
+    # Squeeze last dim to simplify
+    rpn_match = tf.squeeze(rpn_match, -1)
+    # Get anchor classes. Convert the -1/+1 match to 0/1 values.
+    anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int32)
+    # Positive and Negative anchors contribute to the loss,
+    # but neutral anchors (match value = 0) don't.
+    indices = tf.where(tf.not_equal(rpn_match, 0))
+    # Pick rows that contribute to the loss and filter out the rest.
+    rpn_class_logits = tf.gather_nd(rpn_class_logits, indices)
+    anchor_class = tf.gather_nd(anchor_class, indices)
+    # Cross entropy loss
+    # loss = K.sparse_categorical_crossentropy(target=anchor_class,
+    #                                          output=rpn_class_logits,
+    #                                          from_logits=True)
+    # loss = K.switch(tf.size(loss) > 0, K.mean(loss), tf.constant(0.0))
+    # 计算交叉熵
+    loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=rpn_class_logits,
+                                                                         labels=anchor_class,
+                                                                         name='rpn_class_loss'))
+    loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0))
+    return loss
+
+
+def rpn_bbox_loss_graph(batch_size, target_bbox, rpn_match, rpn_bbox):
+    """Return the RPN bounding box loss graph.
+    target_bbox: [batch, max positive anchors, (dy, dx, log(dh), log(dw))].
+        Uses 0 padding to fill in unsed bbox deltas.
+    rpn_match: [batch, anchors, 1]. Anchor match type. 1=positive,
+               -1=negative, 0=neutral anchor.
+    rpn_bbox: [batch, anchors, (dy, dx, log(dh), log(dw))]
+    """
+    # Positive anchors contribute to the loss, but negative and
+    # neutral anchors (match value of 0 or -1) don't.
+    rpn_match = tf.squeeze(rpn_match, -1)
+    indices = tf.where(tf.equal(rpn_match, 1))
+
+    # Pick bbox deltas that contribute to the loss
+    rpn_bbox = tf.gather_nd(rpn_bbox, indices)
+
+    # Trim target bounding box deltas to the same length as rpn_bbox.
+    # 将目标边界框增量修剪为与rpn_bbox相同的长度
+    batch_counts = tf.reduce_sum(tf.cast(tf.equal(rpn_match, 1), tf.int32), axis=1)
+    target_bbox = batch_pack_graph(target_bbox, batch_counts, batch_size)
+
+    # TODO: use smooth_l1_loss() rather than reimplementing here
+    #       to reduce code duplication
+    diff = tf.abs(target_bbox - rpn_bbox)
+    less_than_one = tf.cast(tf.less(diff, 1.0), "float32")
+    loss = (less_than_one * 0.5 * diff ** 2) + (1 - less_than_one) * (diff - 0.5)
+
+    # loss = tf.switch(tf.size(loss) > 0, tf.mean(loss), tf.constant(0.0))
+    loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0))
+    return loss
+
+
+def batch_pack_graph(x, counts, num_rows):
+    """Picks different number of values from each row
+    in x depending on the values in counts.
+    根据值从x中的每一行选取不同数量的值
+    # target_bbox, batch_counts, batch_size
+    """
+    outputs = []
+    for i in range(num_rows):
+        outputs.append(x[i, :counts[i]])
+    return tf.concat(outputs, axis=0)
+
+
+# 有batch版本
+def generate_rpn_match_and_rpn_bbox_with_batch(gt_class_ids, gt_boxes):
+    # Anchors9
+    # [anchor_count, (y1, x1, y2, x2)]
+    backbone_shapes = compute_backbone_shapes(
+        [cfg.IMAGE_DIM, cfg.IMAGE_DIM])  # 【256 128 64 32 16】---1024/[4, 8, 16, 32, 64]
+    anchors = utils.generate_pyramid_anchors(cfg.RPN_ANCHOR_SCALES,
+                                             cfg.RPN_ANCHOR_RATIOS,
+                                             backbone_shapes,
+                                             cfg.BACKBONE_STRIDES,
+                                             cfg.RPN_ANCHOR_STRIDE)
+    batch_rpn_match = np.zeros([cfg.BATCH_SIZE, anchors.shape[0], 1], dtype=np.int32)
+    batch_rpn_bbox = np.zeros([cfg.BATCH_SIZE, cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=np.int32)
+    for i in range(cfg.BATCH_SIZE):
+        rpn_match, rpn_bbox = build_rpn_targets(anchors, gt_class_ids[i, :], gt_boxes[i, :, :])
+        batch_rpn_match[i] = rpn_match[:, np.newaxis]
+        batch_rpn_bbox[i] = rpn_bbox
+        unique = np.unique(rpn_match)
+        print('unique:', unique)
+    print('batch_rpn_match shape', batch_rpn_match.shape)
+    print('batch_rpn_bbox shape', batch_rpn_bbox.shape)
+
+    return batch_rpn_match, batch_rpn_bbox
+
+
+# 无batch版本
 def generate_rpn_match_and_rpn_bbox(gt_class_ids, gt_boxes):
     # Anchors
     # [anchor_count, (y1, x1, y2, x2)]
@@ -239,136 +290,129 @@ def generate_rpn_match_and_rpn_bbox(gt_class_ids, gt_boxes):
                                              backbone_shapes,
                                              cfg.BACKBONE_STRIDES,
                                              cfg.RPN_ANCHOR_STRIDE)
-    batch_rpn_match = np.zeros([cfg.BATCH_SIZE, anchors.shape[0], 1],dtype=np.int32)
-    batch_rpn_bbox = np.zeros([cfg.BATCH_SIZE,cfg.RPN_TRAIN_ANCHORS_PER_IMAGE,4],dtype=np.int32)
-    for i in range(cfg.BATCH_SIZE):
-        rpn_match, rpn_bbox = build_rpn_targets(anchors,gt_class_ids[i,:], gt_boxes[i,:,:])
-        batch_rpn_match[i] = rpn_match[:,np.newaxis]
-        batch_rpn_bbox[i] = rpn_bbox
-        unique = np.unique(rpn_match)
-        print('unique:',unique)
-    print('batch_rpn_match shape',batch_rpn_match.shape)
-    print('batch_rpn_bbox shape', batch_rpn_bbox.shape)
+    rpn_match, rpn_bbox = build_rpn_targets(anchors, gt_class_ids, gt_boxes)
 
-    return batch_rpn_match,batch_rpn_bbox
+    unique = np.unique(rpn_match)
+    print('unique:', unique)
+
+    return rpn_match, rpn_bbox
+
 
 def build_rpn_targets(anchors, gt_class_ids, gt_boxes):
-        """Given the anchors and GT boxes, compute overlaps and identify positive
-        anchors and deltas to refine them to match their corresponding GT boxes.
+    """Given the anchors and GT boxes, compute overlaps and identify positive
+    anchors and deltas to refine them to match their corresponding GT boxes.
 
-        anchors: [num_anchors, (y1, x1, y2, x2)]
-        gt_class_ids: [num_gt_boxes] Integer class IDs.
-        gt_boxes: [num_gt_boxes, (y1, x1, y2, x2)]
+    anchors: [num_anchors, (y1, x1, y2, x2)]
+    gt_class_ids: [num_gt_boxes] Integer class IDs.
+    gt_boxes: [num_gt_boxes, (y1, x1, y2, x2)]
 
-        Returns:
-        rpn_match: [N] (int32) matches between anchors and GT boxes.
-                   1 = positive anchor, -1 = negative anchor, 0 = neutral（iou在0.3和0.7之间）
-        rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
-        """
-        # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
-        rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
-        # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
-        # 其实rpn_bbox可以砍掉一般。因为只有放了一半的正锚点
-        rpn_bbox = np.zeros((cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
+    Returns:
+    rpn_match: [N] (int32) matches between anchors and GT boxes.
+               1 = positive anchor, -1 = negative anchor, 0 = neutral（iou在0.3和0.7之间）
+    rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
+    """
+    # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
+    rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
+    # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
+    # 其实rpn_bbox可以砍掉一般。因为只有放了一半的正锚点
+    rpn_bbox = np.zeros((cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
 
-        # Handle COCO crowds
-        # A crowd box in COCO is a bounding box around several instances. Exclude
-        # them from training. A crowd box is given a negative class ID.
-        crowd_ix = np.where(gt_class_ids < 0)[0]
-        if crowd_ix.shape[0] > 0:
-            # Filter out crowds from ground truth class IDs and boxes
-            non_crowd_ix = np.where(gt_class_ids > 0)[0]
-            crowd_boxes = gt_boxes[crowd_ix]
-            gt_class_ids = gt_class_ids[non_crowd_ix]
-            gt_boxes = gt_boxes[non_crowd_ix]
-            # Compute overlaps with crowd boxes [anchors, crowds]
-            crowd_overlaps = utils.compute_overlaps(anchors, crowd_boxes)
-            crowd_iou_max = np.amax(crowd_overlaps, axis=1)
-            no_crowd_bool = (crowd_iou_max < 0.001)
-        else:
-            # All anchors don't intersect a crowd
-            no_crowd_bool = np.ones([anchors.shape[0]], dtype=bool)
+    # Handle COCO crowds
+    # A crowd box in COCO is a bounding box around several instances. Exclude
+    # them from training. A crowd box is given a negative class ID.
+    crowd_ix = np.where(gt_class_ids < 0)[0]
+    if crowd_ix.shape[0] > 0:
+        # Filter out crowds from ground truth class IDs and boxes
+        non_crowd_ix = np.where(gt_class_ids > 0)[0]
+        crowd_boxes = gt_boxes[crowd_ix]
+        gt_class_ids = gt_class_ids[non_crowd_ix]
+        gt_boxes = gt_boxes[non_crowd_ix]
+        # Compute overlaps with crowd boxes [anchors, crowds]
+        crowd_overlaps = utils.compute_overlaps(anchors, crowd_boxes)
+        crowd_iou_max = np.amax(crowd_overlaps, axis=1)
+        no_crowd_bool = (crowd_iou_max < 0.001)
+    else:
+        # All anchors don't intersect a crowd
+        no_crowd_bool = np.ones([anchors.shape[0]], dtype=bool)
 
-        # Compute overlaps [num_anchors, num_gt_boxes]  每个值都是面积重叠的比例
-        overlaps = utils.compute_overlaps(anchors, gt_boxes)
+    # Compute overlaps [num_anchors, num_gt_boxes]  每个值都是面积重叠的比例
+    overlaps = utils.compute_overlaps(anchors, gt_boxes)
 
-        # Match anchors to GT Boxes
-        # If an anchor overlaps a GT box with IoU >= 0.7 then it's positive.
-        # If an anchor overlaps a GT box with IoU < 0.3 then it's negative.
-        # Neutral anchors are those that don't match the conditions above,
-        # and they don't influence the loss function.
-        # However, don't keep any GT box unmatched (rare, but happens). Instead,
-        # match it to the closest anchor (even if its max IoU is < 0.3).
-        #
-        # 1. Set negative anchors first. They get overwritten below if a GT box is
-        # matched to them. Skip boxes in crowd areas.
-        anchor_iou_argmax = np.argmax(overlaps, axis=1)
-        anchor_iou_max = overlaps[np.arange(overlaps.shape[0]), anchor_iou_argmax]
-        rpn_match[(anchor_iou_max < 0.3) & (no_crowd_bool)] = -1  # 将Iou《0.3的设为-1
-        # 2. Set an anchor for each GT box (regardless of IoU value).
-        # TODO: If multiple anchors have the same IoU match all of them
-        gt_iou_argmax = np.argmax(overlaps, axis=0)
-        rpn_match[gt_iou_argmax] = 1  # 将锚点中，对应与任何一个bbox的Iou最大的值都设为1
-        # 3. Set anchors with high overlap as positive.
-        rpn_match[anchor_iou_max >= 0.7] = 1  # 将将Iou>= 0.7的设为
-        # 要么充分重叠，要么不充分重叠。  介于二者之前的都是0
+    # Match anchors to GT Boxes
+    # If an anchor overlaps a GT box with IoU >= 0.7 then it's positive.
+    # If an anchor overlaps a GT box with IoU < 0.3 then it's negative.
+    # Neutral anchors are those that don't match the conditions above,
+    # and they don't influence the loss function.
+    # However, don't keep any GT box unmatched (rare, but happens). Instead,
+    # match it to the closest anchor (even if its max IoU is < 0.3).
+    #
+    # 1. Set negative anchors first. They get overwritten below if a GT box is
+    # matched to them. Skip boxes in crowd areas.
+    anchor_iou_argmax = np.argmax(overlaps, axis=1)
+    anchor_iou_max = overlaps[np.arange(overlaps.shape[0]), anchor_iou_argmax]
+    rpn_match[(anchor_iou_max < 0.3) & (no_crowd_bool)] = -1  # 将Iou《0.3的设为-1
+    # 2. Set an anchor for each GT box (regardless of IoU value).
+    # TODO: If multiple anchors have the same IoU match all of them
+    gt_iou_argmax = np.argmax(overlaps, axis=0)
+    rpn_match[gt_iou_argmax] = 1  # 将锚点中，对应与任何一个bbox的Iou最大的值都设为1
+    # 3. Set anchors with high overlap as positive.
+    rpn_match[anchor_iou_max >= 0.7] = 1  # 将将Iou>= 0.7的设为
+    # 要么充分重叠，要么不充分重叠。  介于二者之前的都是0
 
-        # Subsample to balance positive and negative anchors
-        # Don't let positives be more than half the anchors
-        # 总共256个正负锚点框。正负锚点有超过半数的，通过随机值将其去掉。
-        ids = np.where(rpn_match == 1)[0]
-        extra = len(ids) - (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE // 2)
-        if extra > 0:
-            # Reset the extra ones to neutral
-            ids = np.random.choice(ids, extra, replace=False)
-            rpn_match[ids] = 0
-        # Same for negative proposals
-        ids = np.where(rpn_match == -1)[0]
-        extra = len(ids) - (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE -
-                            np.sum(rpn_match == 1))
-        if extra > 0:
-            # Rest the extra ones to neutral
-            ids = np.random.choice(ids, extra, replace=False)
-            rpn_match[ids] = 0
+    # Subsample to balance positive and negative anchors
+    # Don't let positives be more than half the anchors
+    # 总共256个正负锚点框。正负锚点有超过半数的，通过随机值将其去掉。
+    ids = np.where(rpn_match == 1)[0]
+    extra = len(ids) - (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE // 2)
+    if extra > 0:
+        # Reset the extra ones to neutral
+        ids = np.random.choice(ids, extra, replace=False)
+        rpn_match[ids] = 0
+    # Same for negative proposals
+    ids = np.where(rpn_match == -1)[0]
+    extra = len(ids) - (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE -
+                        np.sum(rpn_match == 1))
+    if extra > 0:
+        # Rest the extra ones to neutral
+        ids = np.random.choice(ids, extra, replace=False)
+        rpn_match[ids] = 0
 
-        # For positive anchors, compute shift and scale needed to transform them
-        # to match the corresponding GT boxes.
-        ids = np.where(rpn_match == 1)[0]
-        ix = 0  # index into rpn_bbox
-        # TODO: use box_refinement() rather than duplicating the code here
-        for i, a in zip(ids, anchors[ids]):
-            # Closest gt box (it might have IoU < 0.7)
-            gt = gt_boxes[anchor_iou_argmax[i]]
+    # For positive anchors, compute shift and scale needed to transform them
+    # to match the corresponding GT boxes.
+    ids = np.where(rpn_match == 1)[0]
+    ix = 0  # index into rpn_bbox
+    # TODO: use box_refinement() rather than duplicating the code here
+    for i, a in zip(ids, anchors[ids]):
+        # Closest gt box (it might have IoU < 0.7)
+        gt = gt_boxes[anchor_iou_argmax[i]]
 
-            # Convert coordinates to center plus width/height.
-            # GT Box
-            # 计算bbox的高、宽、中心点
-            gt_h = gt[2] - gt[0]
-            gt_w = gt[3] - gt[1]
-            gt_center_y = gt[0] + 0.5 * gt_h
-            gt_center_x = gt[1] + 0.5 * gt_w
+        # Convert coordinates to center plus width/height.
+        # GT Box
+        # 计算bbox的高、宽、中心点
+        gt_h = gt[2] - gt[0]
+        gt_w = gt[3] - gt[1]
+        gt_center_y = gt[0] + 0.5 * gt_h
+        gt_center_x = gt[1] + 0.5 * gt_w
 
-            # 计算Anchor的高、宽、中心点
-            a_h = a[2] - a[0]
-            a_w = a[3] - a[1]
-            a_center_y = a[0] + 0.5 * a_h
-            a_center_x = a[1] + 0.5 * a_w
+        # 计算Anchor的高、宽、中心点
+        a_h = a[2] - a[0]
+        a_w = a[3] - a[1]
+        a_center_y = a[0] + 0.5 * a_h
+        a_center_x = a[1] + 0.5 * a_w
 
-            # Compute the bbox refinement that the RPN should predict.
-            # 计算需要预测的中心点偏移比例及高、宽缩放比例
-            rpn_bbox[ix] = [
-                (gt_center_y - a_center_y) / a_h,
-                (gt_center_x - a_center_x) / a_w,
-                np.log(gt_h / a_h),
-                np.log(gt_w / a_w),
-            ]
-            # Normalize
-            rpn_bbox[ix] /= cfg.RPN_BBOX_STD_DEV
-            ix += 1
+        # Compute the bbox refinement that the RPN should predict.
+        # 计算需要预测的中心点偏移比例及高、宽缩放比例
+        rpn_bbox[ix] = [
+            (gt_center_y - a_center_y) / a_h,
+            (gt_center_x - a_center_x) / a_w,
+            np.log(gt_h / a_h),
+            np.log(gt_w / a_w),
+        ]
+        # Normalize
+        rpn_bbox[ix] /= cfg.RPN_BBOX_STD_DEV
+        ix += 1
 
-        return rpn_match, rpn_bbox
-
-
+    return rpn_match, rpn_bbox
 
 
 # 计算resnet返回的形状
