@@ -191,27 +191,27 @@ def build_fpn_mask_graph(rois,  # 目标实物检测结果，标准坐标[batch,
                         name='roi_align_mask')([rois, feature_maps])
 
     # conv_layers
-    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv1')
+    x = tf.layers.conv3d(x, 256, 3, padding='same', name='mrcnn_mask_conv1')
     x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn1')
     x = tf.nn.relu(x)
 
-    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv2')
+    x = tf.layers.conv3d(x, 256, 3, padding='same', name='mrcnn_mask_conv2')
     x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn2')
     x = tf.nn.relu(x)
 
-    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv3')
+    x = tf.layers.conv3d(x, 256, 3, padding='same', name='mrcnn_mask_conv3')
     x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn3')
     x = tf.nn.relu(x)
 
-    x = tf.layers.conv2d(x, 256, (3, 3), padding='same', name='mrcnn_mask_conv4')
+    x = tf.layers.conv3d(x, 256, 3, padding='same', name='mrcnn_mask_conv4')
     x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_mask_bn4')
     x = tf.nn.relu(x)  # Tensor("Relu_10:0", shape=(?, 14, 14, 256), dtype=float32)
 
     # 使用反卷积上采样
-    x = tf.layers.conv2d_transpose(x, 256, 2, strides=(2, 2), activation=tf.nn.relu, name='mrcnn_masj_deconv')
+    x = tf.layers.conv3d_transpose(x, 256, 2, strides=(2, 2,2), activation=tf.nn.relu, name='mrcnn_masj_deconv')
 
     # 用卷积代替全连接
-    x = tf.layers.conv2d(x, num_classes, 1, strides=(1, 1), activation=tf.nn.relu, name='mrcnn_mask')
+    x = tf.layers.conv3d(x, num_classes, 1, activation=tf.nn.relu, name='mrcnn_mask')
 
     return x
 
@@ -222,6 +222,7 @@ def fpn_classifier_graph(rois, feature_maps,
     # ROIAlign层 Shape: [batch, num_boxes, pool_height, pool_width, channels]
     x = PyramidROIAlign(batch_size, [pool_size, pool_size],
                         name="roi_align_classifier")([rois, feature_maps])
+    x = tf.squeeze(x,axis=0)
     # 用卷积替代两个1024全连接网络
     x = tf.layers.conv2d(x, fc_layers_size, pool_size, (pool_size, pool_size), padding='same', name='mrcnn_class_conv1')
     x = tf.layers.batch_normalization(x, training=train_bn, name='mrcnn_class_bn1')
@@ -321,7 +322,7 @@ class PyramidROIAlign:
         pooled = tf.gather(pooled, ix)  # 按照索引从pooled中取出的框，就是原始顺序了。
 
         # 加上批次维度，并返回
-        # pooled = tf.expand_dims(pooled, 0)  # 应该用reshape
+        pooled = tf.expand_dims(pooled, 0)  # 应该用reshape
         # pooled = KL.Reshape([self.batch_size,-1, self.pool_shape, self.pool_shape, mask_rcnn_model.FPN_FEATURE], name="pooled")(pooled)
         # pooled = tf.reshape(pooled, [self.batch_size,1000, self.pool_shape, self.pool_shape, mask_rcnn_model.FPN_FEATURE])
         return pooled

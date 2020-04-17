@@ -9,7 +9,6 @@ from core.mask_rcnn_model import generate_rpn_match_and_rpn_bbox
 
 from diabetic_package.file_operator import bz_path
 
-
 '''
     输入尺寸应该为：
     batch_images：【3,128,128,3】
@@ -25,7 +24,7 @@ from diabetic_package.file_operator import bz_path
 class Dataset:
     def __init__(self, mode, base_folder, tfrecord_folder, data_reload=True, use_numpy_style=False):
         self.mode = mode
-        self.class_num=21
+        self.class_num = 21
         self.base_folder = base_folder
         img_dir = self.base_folder + os.sep + 'imgs'
         label_dir = self.base_folder + os.sep + 'labels'
@@ -36,10 +35,11 @@ class Dataset:
             generator = self.create_dataset_numpy(
                 image_list=self.img_list, label_list=self.label_list,
                 batch_size=cfg.BATCH_SIZE)
-            self.batch_image, self.batch_mask, self.batch_bbox, self.batch_class_ids = next(generator)
+            self.batch_image, self.batch_mask, self.batch_bbox, self.batch_class_ids, self.batch_activate_ids = next(
+                generator)
         else:
             if data_reload:
-                self.image, self.boxes, self.masks, self.class_ids, self.rpn_match, self.rpn_bbox,self.activate_ids = self.load_tfrecord(
+                self.image, self.boxes, self.masks, self.class_ids, self.rpn_match, self.rpn_bbox, self.activate_ids = self.load_tfrecord(
                     self.tfrecord_name)
             else:
                 self.create_tfrecord(self.tfrecord_name)
@@ -57,7 +57,8 @@ class Dataset:
         activate_ids = np.zeros(self.class_num)
         bbox = []
         activate_class = np.unique(src_label)
-        activate_ids[activate_class]=1
+        print('activate_class :', activate_class)
+        activate_ids[activate_class] = 1
 
         for i in range(0, len(contours)):
             if contours[i].shape[0] >= cfg.MAX_OBJ_NUM:
@@ -68,7 +69,8 @@ class Dataset:
                 bbox.extend([int(x), int(y), int(x + w / 2), int(y + h / 2), label])
 
                 region = src_label[y:y + h + 1, x:x + w + 1]
-                region = cv2.resize(region, (cfg.MINI_MASK_SHAPE[0],cfg.MINI_MASK_SHAPE[1]), interpolation=cv2.INTER_NEAREST)
+                region = cv2.resize(region, (cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1]),
+                                    interpolation=cv2.INTER_NEAREST)
                 # visible(region)
                 mask = np.expand_dims(region, 2)
                 masks = np.append(masks, mask)
@@ -80,40 +82,41 @@ class Dataset:
         bbox = np.array(bbox).reshape((cfg.MAX_OBJ_NUM, 5)).astype(np.float32)
         masks = np.reshape(masks, (cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], -1))
         if masks.shape[-1] < cfg.MAX_OBJ_NUM:
-            pad_mask = np.tile(np.zeros((cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], 1)), (1, 1, (cfg.MAX_OBJ_NUM - masks.shape[-1])))
+            pad_mask = np.tile(np.zeros((cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], 1)),
+                               (1, 1, (cfg.MAX_OBJ_NUM - masks.shape[-1])))
             masks = np.concatenate([masks, pad_mask], axis=2).astype(np.float32)
         else:
             masks = np.concatenate([masks[:, :, :cfg.MAX_OBJ_NUM]], axis=2).astype(np.float32)
         if use_tf_style:
-            return masks, bbox[:, :4], bbox[:, 4:],activate_ids
+            return masks, bbox[:, :4], bbox[:, 4:], activate_ids
         else:
-            return masks, bbox[:, :4], bbox[:, 4:],activate_ids
+            return masks, bbox[:, :4], bbox[:, 4:], activate_ids
 
     def create_dataset_numpy(self, image_list, label_list, batch_size):
-        lists = np.vstack([image_list, label_list])
-
-        num_batch = math.ceil(len(lists) / batch_size)  # 确定每轮有多少个batch
+        num_batch = math.ceil(len(image_list) / batch_size)  # 确定每轮有多少个batch
         for i in range(num_batch):
-            if (i == 0):
-                np.random.shuffle(lists)
-            batch_list = lists[:, i * batch_size: i * batch_size + batch_size]
-            np.random.shuffle(batch_list)
-            batch_image_path = np.array([image_path for image_path in batch_list[1, :]])
-            batch_label_path = np.array([label_path for label_path in batch_list[0, :]])
+
+            batch_image_list = image_list[i * batch_size: i * batch_size + batch_size]
+            batch_label_list = label_list[i * batch_size: i * batch_size + batch_size]
+            batch_label_path = np.array([image_path for image_path in batch_label_list[:]])
+            batch_image_path = np.array([label_path for label_path in batch_image_list[:]])
             batch_image = []
             batch_bbox = []
             batch_mask = []
             batch_class_ids = []
+            batch_activate_ids = []
             for j in range(batch_size):
                 image = cv2.imread(batch_image_path[j], 1)
                 image = cv2.resize(image, (cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM))
                 label = cv2.imread(batch_label_path[j], 0)
                 label = cv2.resize(label, (cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM))
-                masks, bbox, class_ids = self.get_single_mask(label, use_tf_style=False)
+                print('图片路径：', batch_image_path[j])
+                masks, bbox, class_ids, activate_ids = self.get_single_mask(label, use_tf_style=False)
                 batch_image.append(image.astype(np.float32))
                 batch_bbox.append(bbox.astype(np.float32))
                 batch_mask.append(masks.astype(np.float32))
                 batch_class_ids.append(class_ids.astype(np.float32))
+                batch_activate_ids.append(activate_ids.astype(np.float32))
 
             batch_image = np.stack(batch_image)
             print('batch_image shape:', batch_image.shape)
@@ -124,7 +127,9 @@ class Dataset:
             batch_class_ids = np.stack(batch_class_ids)
             batch_class_ids = np.squeeze(batch_class_ids)
             print('batch_class_ids shape', batch_class_ids.shape)
-            yield batch_image, batch_mask, batch_bbox, batch_class_ids
+            batch_activate_ids = np.stack(batch_activate_ids)
+            print('batch_activate_ids shape', batch_activate_ids.shape)
+            yield batch_image, batch_mask, batch_bbox, batch_class_ids, batch_activate_ids
 
     def create_tfrecord(self, tfrecord_name):
         '''
@@ -142,7 +147,7 @@ class Dataset:
             img = cv2.resize(img, (cfg.IMAGE_DIM, cfg.IMAGE_DIM))
             full_scale_mask = cv2.imread(self.label_list[i], 0)
             # print(self.full_scale_mask_list[i])
-            masks, bbox, class_ids,activate_ids = self.get_single_mask(full_scale_mask)
+            masks, bbox, class_ids, activate_ids = self.get_single_mask(full_scale_mask)
             # 获得rpn loss的gt
             rpn_match, rpn_bbox = generate_rpn_match_and_rpn_bbox(class_ids, bbox)
 
@@ -190,14 +195,14 @@ class Dataset:
         class_ids = tf.reshape(class_ids, (cfg.MAX_OBJ_NUM,))
 
         rpn_match = tf.decode_raw(features['rpn_match'], tf.float32)
-        rpn_match = tf.reshape(rpn_match, (-1,1))
+        rpn_match = tf.reshape(rpn_match, (-1, 1))
 
         rpn_bbox = tf.decode_raw(features['rpn_bbox'], tf.float32)
-        rpn_bbox = tf.reshape(rpn_bbox, (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE,4))
+        rpn_bbox = tf.reshape(rpn_bbox, (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
 
         activate_ids = tf.decode_raw(features['activate_ids'], tf.float32)
         # rpn_match = tf.reshape(rpn_match, (-1, 1))
-        return image, boxes, masks, class_ids, rpn_match, rpn_bbox,activate_ids
+        return image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids
 
     def load_tfrecord(self, tfrecord_file):
         dataset = tf.data.TFRecordDataset(tfrecord_file)
@@ -207,7 +212,7 @@ class Dataset:
         dataset = dataset.repeat(100)
 
         iteror = dataset.make_one_shot_iterator()
-        image, boxes, masks, class_ids, rpn_match, rpn_bbox,activate_ids = iteror.get_next()
+        image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids = iteror.get_next()
         return image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids
 
 

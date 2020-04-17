@@ -24,7 +24,7 @@ rpn_visualize_dir = 'rpn_feature_image'
 # print('=====================================================================')
 dataset2 = Dataset(mode='val', base_folder='voc/val',
                    tfrecord_folder='data', use_numpy_style=True)
-batch_image, batch_mask, batch_bbox, batch_class_ids = dataset2.batch_image, dataset2.batch_mask, dataset2.batch_bbox, dataset2.batch_class_ids
+batch_image, batch_mask, batch_bbox, batch_class_ids,batch_activate_ids = dataset2.batch_image, dataset2.batch_mask, dataset2.batch_bbox, dataset2.batch_class_ids,dataset2.batch_activate_ids
 batch_rpn_match,batch_rpn_bbox=generate_rpn_match_and_rpn_bbox_with_batch(batch_class_ids,batch_bbox)
 
 print('batch_image shape:', batch_image.shape)
@@ -33,6 +33,7 @@ print('batch_bbox shape:', batch_bbox.shape)
 print('batch_class_ids shape:', batch_class_ids.shape)
 print('batch_rpn_match shape:', batch_rpn_match.shape)
 print('batch_rpn_bbox shape:', batch_rpn_bbox.shape)
+print('batch_activate_ids shape:', batch_activate_ids.shape)
 
 # 调试模式
 # image = tf.convert_to_tensor(image)
@@ -67,13 +68,15 @@ batch_bbox = tf.convert_to_tensor(batch_bbox.astype(np.float32))
 batch_class_ids = tf.convert_to_tensor(batch_class_ids.astype(np.int32))
 batch_rpn_match = tf.convert_to_tensor(batch_rpn_match.astype(np.float32))
 batch_rpn_bbox = tf.convert_to_tensor(batch_rpn_bbox.astype(np.float32))
+batch_activate_ids = tf.convert_to_tensor(batch_activate_ids.astype(np.float32))
 
 model.build(input_image=batch_image,
             input_gt_class_ids=batch_class_ids,
             input_gt_box=batch_bbox,
             input_gt_masks=batch_mask,
             input_gt_rpn_match= batch_rpn_match,
-            input_gt_rpn_bbox=batch_rpn_bbox
+            input_gt_rpn_bbox=batch_rpn_bbox,
+            input_activate_ids=batch_activate_ids
             )
 
 d=0
