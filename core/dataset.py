@@ -39,11 +39,11 @@ class Dataset:
                 generator)
         else:
             if data_reload:
-                self.image, self.boxes, self.masks, self.class_ids, self.rpn_match, self.rpn_bbox, self.activate_ids = self.load_tfrecord(
+                self.batch_data = self.load_tfrecord(
                     self.tfrecord_name)
             else:
                 self.create_tfrecord(self.tfrecord_name)
-                self.image, self.boxes, self.masks, self.class_ids, self.rpn_match, self.rpn_bbox, self.activate_ids = self.load_tfrecord(
+                self.batch_data = self.load_tfrecord(
                     self.tfrecord_name)
 
     def get_single_mask(self, src_label, use_tf_style=True):
@@ -57,7 +57,6 @@ class Dataset:
         activate_ids = np.zeros(self.class_num)
         bbox = []
         activate_class = np.unique(src_label)
-        print('activate_class :', activate_class)
         activate_ids[activate_class] = 1
 
         for i in range(0, len(contours)):
@@ -115,20 +114,20 @@ class Dataset:
                 batch_image.append(image.astype(np.float32))
                 batch_bbox.append(bbox.astype(np.float32))
                 batch_mask.append(masks.astype(np.float32))
-                batch_class_ids.append(class_ids.astype(np.float32))
+                batch_class_ids.append(class_ids.astype(np.float32).reshape(class_ids.shape[0], ))
                 batch_activate_ids.append(activate_ids.astype(np.float32))
 
             batch_image = np.stack(batch_image)
-            print('batch_image shape:', batch_image.shape)
+            # print('batch_image shape:', batch_image.shape)
             batch_mask = np.stack(batch_mask)
-            print('batch_mask shape', batch_mask.shape)
+            # print('batch_mask shape', batch_mask.shape)
             batch_bbox = np.stack(batch_bbox)
-            print('batch_bbox shape', batch_bbox.shape)
+            # print('batch_bbox shape', batch_bbox.shape)
             batch_class_ids = np.stack(batch_class_ids)
             batch_class_ids = np.squeeze(batch_class_ids)
-            print('batch_class_ids shape', batch_class_ids.shape)
+            # print('batch_class_ids shape', batch_class_ids.shape)
             batch_activate_ids = np.stack(batch_activate_ids)
-            print('batch_activate_ids shape', batch_activate_ids.shape)
+            # print('batch_activate_ids shape', batch_activate_ids.shape)
             yield batch_image, batch_mask, batch_bbox, batch_class_ids, batch_activate_ids
 
     def create_tfrecord(self, tfrecord_name):
@@ -150,6 +149,13 @@ class Dataset:
             masks, bbox, class_ids, activate_ids = self.get_single_mask(full_scale_mask)
             # 获得rpn loss的gt
             rpn_match, rpn_bbox = generate_rpn_match_and_rpn_bbox(class_ids, bbox)
+
+            masks = masks.astype(np.float32)
+            bbox = bbox.astype(np.float32)
+            class_ids = class_ids.astype(np.float32)
+            activate_ids = activate_ids.astype(np.float32)
+            rpn_match = rpn_match.astype(np.float32)
+            rpn_bbox = rpn_bbox.astype(np.float32)
 
             # 将图片转为二进制格式
             img = img.tobytes()
@@ -184,56 +190,71 @@ class Dataset:
         image = tf.decode_raw(features['img_raw'], tf.uint8)
         image = tf.cast(image, tf.float32)
         image = tf.reshape(image, [cfg.IMAGE_DIM, cfg.IMAGE_DIM, 3])
-
+        # print('image_shape:',cfg.IMAGE_DIM, cfg.IMAGE_DIM, 3)
         masks = tf.decode_raw(features['masks'], tf.float32)
         masks = tf.reshape(masks, [cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], cfg.MAX_OBJ_NUM])
-
+        # print('mask shape:',cfg.MINI_MASK_SHAPE[0], cfg.MINI_MASK_SHAPE[1], cfg.MAX_OBJ_NUM)
         boxes = tf.decode_raw(features['bboxes'], tf.float32)
         boxes = tf.reshape(boxes, [cfg.MAX_OBJ_NUM, 4])
-
+        # print('boxes shape:',cfg.MAX_OBJ_NUM, 4)
         class_ids = tf.decode_raw(features['class_ids'], tf.float32)
-        class_ids = tf.reshape(class_ids, (cfg.MAX_OBJ_NUM,))
-
+        class_ids = tf.reshape(class_ids, [cfg.MAX_OBJ_NUM, ])
+        # print('class_ids shape:',cfg.MAX_OBJ_NUM,)
         rpn_match = tf.decode_raw(features['rpn_match'], tf.float32)
-        rpn_match = tf.reshape(rpn_match, (-1, 1))
-
+        rpn_match = tf.reshape(rpn_match, [65472, 1])
+        # print('rpn_match shape:',tf.shape(rpn_match))
         rpn_bbox = tf.decode_raw(features['rpn_bbox'], tf.float32)
-        rpn_bbox = tf.reshape(rpn_bbox, (cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
-
+        rpn_bbox = tf.reshape(rpn_bbox, [cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4])  # reshape5报错点
+        # print('rpn_bbox shape:',cfg.RPN_TRAIN_ANCHORS_PER_IMAGE, 4)
         activate_ids = tf.decode_raw(features['activate_ids'], tf.float32)
-        # rpn_match = tf.reshape(rpn_match, (-1, 1))
-        return image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids
+        activate_ids = tf.reshape(activate_ids, [cfg.NUM_CLASS, ])
+        # rpn_match = tf.reshape(rpn_match, [-1, 1])
+        # print('activate_ids shape:',tf.shape(activate_ids))
+        return (image, (boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids))
 
     def load_tfrecord(self, tfrecord_file):
         dataset = tf.data.TFRecordDataset(tfrecord_file)
         dataset = dataset.map(self.pareser)
+        dataset = dataset.repeat(cfg.EPOCH_NUM)
+        dataset = dataset.batch(batch_size=cfg.BATCH_SIZE)
         dataset = dataset.shuffle(buffer_size=1000)
-        dataset = dataset.batch(batch_size=3)
-        dataset = dataset.repeat(100)
-
-        iteror = dataset.make_one_shot_iterator()
-        image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids = iteror.get_next()
-        return image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids
+        iterator = dataset.make_one_shot_iterator()
+        batch_data = iterator.get_next()
+        return batch_data
+        # image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids = iteror.get_next()
+        # return image, boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids
 
 
 if __name__ == '__main__':
+
+    '''
+    img shape: (512, 512, 3)
+    masks shape: (56, 56, 50)
+    bbox shape: (50, 4)
+    class_ids shape: (50, 1)
+    activate_ids shape: (21,)
+    rpn_match shape: (65472,)
+    rpn_bbox shape: (256, 4)
+    '''
     import time
 
+    # tf.enable_eager_execution()
     start = time.time()
-    dataset = Dataset(mode='val', base_folder=r'E:\Pycharm_project\mask_rcnn_TF\voc\val',
-                      tfrecord_folder=r'E:\Pycharm_project\mask_rcnn_TF\data',
+    dataset = Dataset(mode='val', base_folder='../voc/val',
+                      tfrecord_folder='../data',
                       data_reload=False,
                       use_numpy_style=False)
+
     end = time.time()
     print('using time:', end - start)
 
-    # image, boxes, masks, class_ids = dataset.image, dataset.boxes, dataset.masks, dataset.class_ids
-    # with tf.Session() as sess:
-    #     sess.run(tf.global_variables_initializer())
-    #     i = 0
-    #     while True:
-    #         i += 1
-    #         # 顺序获取数据，打印输出
-    #         im, bo, ma, class_id = sess.run([image, boxes, masks, class_ids])
-    #         d = 0
-    #         print(i, im, bo, ma)
+    (image, (boxes, masks, class_ids, rpn_match, rpn_bbox, activate_ids)) = dataset.batch_data
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        i = 0
+        while True:
+            i += 1
+            # 顺序获取数据，打印输出
+            im, bo, ma, class_id = sess.run([image, boxes, masks, class_ids])
+            d = 0
+            print(i, im, bo, ma)

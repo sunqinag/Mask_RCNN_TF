@@ -15,17 +15,16 @@ class Mask_RCNN:
         """
         self.mode = mode
         self.batch_size = cfg.BATCH_SIZE
-        self.num_class = 21
+        self.num_class = cfg.NUM_CLASS
 
-    def build(self, input_image, input_gt_class_ids, input_gt_box, input_gt_masks,
-              input_gt_rpn_match, input_gt_rpn_bbox,input_activate_ids):  # 构建Mask R-CNN架构
+    def build(self, input_image, input_gt_class_ids, input_gt_box, input_gt_masks):  # 构建Mask R-CNN架构
         # input_image = tf.identity(input_image, name='input_image_layer')
         # input_image = tf.placeholder(shape=[None,cfg.IMAGE_MIN_DIM,cfg.IMAGE_MIN_DIM,3],name='input_image',dtype=tf.float32)
         # 检查尺寸合法性
         h, w = cfg.IMAGE_MIN_DIM, cfg.IMAGE_MIN_DIM
         if h / 2 ** 6 != int(h / 2 ** 6) or w / 2 ** 6 != int(w / 2 ** 6):
             raise Exception("必须要被2的6次方整除.例如： 256, 320, 384, 448, 512, ... etc. ")
-        if self.mode == 'training':  # 处理训练接口
+        if self.mode == 'train':  # 处理训练接口
             # 由图片和标注生成的关于锚点的值1 -1 0.用于RPN的标签
             # input_rpn_match = tf.placeholder(shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
             # 由图片和标注生成的关于锚点框的偏移量x,y 高宽缩放.用于RPN的标签
@@ -116,17 +115,16 @@ class Mask_RCNN:
             # 进行语义分割，掩码预测
             mrcnn_mask = net.build_fpn_mask_graph(rois, mrcnn_feature_maps,
                                                   cfg.MASK_POOL_SIZE, self.num_class, self.batch_size, train_bn=False)
-            # 计算loss
-            rpn_class_loss = rpn_class_loss_graph(input_gt_rpn_match, rpn_class_logits)
-            rpn_bbox_loss = rpn_bbox_loss_graph(cfg.BATCH_SIZE, input_gt_rpn_bbox, input_gt_rpn_match, rpn_bbox)
-            class_loss = mrcnn_class_loss_graph(self.num_class,self.batch_size,target_class_ids, mrcnn_class_logits, input_gt_class_ids)
-            bbox_loss =mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox)
-            mask_loss =mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask)
-
-
-
-
-
+            return rpn_class_logits, rpn_bbox, mrcnn_class_logits, mrcnn_bbox, mrcnn_mask, target_class_ids, target_bbox, target_mask
+            # # 计算loss
+            # rpn_class_loss = rpn_class_loss_graph(input_gt_rpn_match, rpn_class_logits)
+            # rpn_bbox_loss = rpn_bbox_loss_graph(cfg.BATCH_SIZE, input_gt_rpn_bbox, input_gt_rpn_match, rpn_bbox)
+            # class_loss = mrcnn_class_loss_graph(self.num_class, self.batch_size, target_class_ids, mrcnn_class_logits,
+            #                                     input_gt_class_ids)
+            # bbox_loss = mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox)
+            # mask_loss = mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask)
+            # loss=cfg.LOSS_WEIGHTS['rpn_class_loss']*rpn_class_loss+cfg.LOSS_WEIGHTS['rpn_class_loss']*rpn_bbox_loss+cfg.LOSS_WEIGHTS['rpn_class_loss']*class_loss+cfg.LOSS_WEIGHTS['rpn_class_loss']*bbox_loss+mask_loss
+            # return loss
 
     def get_anchors(self, image_shape):
         '''根据指定图片大小生成锚点.输入为原图尺寸'''
@@ -158,22 +156,24 @@ class Mask_RCNN:
             self._anchor_cache[tuple(image_shape)] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[tuple(image_shape)]  # 现在这里的坐标值是归一化的，还有负值
 
+
 def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
     """Mask binary cross-entropy loss for the masks head.
-
     target_masks: [batch, num_rois, height, width].
         A float32 tensor of values 0 or 1. Uses zero padding to fill array.
     target_class_ids: [batch, num_rois]. Integer class IDs. Zero padded.
     pred_masks: [batch, proposals, height, width, num_classes] float32 tensor
                 with values from 0 to 1.
     """
+
+    tf.unique(tf.reshape(target_masks, [-1]))
     # Reshape for simplicity. Merge first two dimensions into one.
-    target_class_ids = tf.reshape(target_class_ids, (-1,))
+    target_class_ids = tf.reshape(target_class_ids, (-1,), name='target_class_ids_reshape')
     mask_shape = tf.shape(target_masks)
-    target_masks = tf.reshape(target_masks, (-1, mask_shape[2], mask_shape[3]))
+    target_masks = tf.reshape(target_masks, (-1, mask_shape[2], mask_shape[3]), name='target_masks_reshape')
     pred_shape = tf.shape(pred_masks)
     pred_masks = tf.reshape(pred_masks,
-                           (-1, pred_shape[2], pred_shape[3], pred_shape[4]))
+                            (-1, pred_shape[2], pred_shape[3], pred_shape[4]), name='pred_masks_reshape')
     # Permute predicted masks to [N, num_classes, height, width]
     pred_masks = tf.transpose(pred_masks, [0, 3, 1, 2])
 
@@ -191,12 +191,10 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
     # Compute binary cross entropy. If no positive ROIs, then return 0.
     # shape: [batch, roi, num_classes]
     loss = tf.cond(tf.size(y_true) > 0,
-                    lambda:tf.nn.softmax_cross_entropy_with_logits(target=y_true, output=y_pred),
-                    lambda:tf.constant(0.0))
+                   lambda: tf.nn.softmax_cross_entropy_with_logits(labels=y_true, logits=y_pred),
+                   lambda: tf.constant(0.0))
     loss = tf.reduce_mean(loss)
     return loss
-
-
 
 
 def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
@@ -207,11 +205,9 @@ def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     pred_bbox: [batch, num_rois, num_classes, (dy, dx, log(dh), log(dw))]
     """
     # Reshape to merge batch and roi dimensions for simplicity.
-    target_class_ids = tf.reshape(target_class_ids, (-1,))
-    target_bbox = tf.reshape(target_bbox, (-1, 4))
-    print("___________pred_bbox________", pred_bbox)
-    pred_bbox = tf.reshape(pred_bbox, (-1, tf.shape(pred_bbox)[2], 4))
-    print("___________pred_bbox________", pred_bbox)
+    target_class_ids = tf.reshape(target_class_ids, (-1,), name='target_class_ids_reshape')
+    target_bbox = tf.reshape(target_bbox, (-1, 4), name='target_bbox_reshape')
+    pred_bbox = tf.reshape(pred_bbox, (-1, tf.shape(pred_bbox)[2], 4), name='pred_bbox_reshape')
 
     # Only positive ROIs contribute to the loss. And only
     # the right class_id of each ROI. Get their indices.
@@ -226,10 +222,11 @@ def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
 
     # Smooth-L1 Loss
     loss = tf.cond(tf.size(target_bbox) > 0,
-                    lambda :smooth_l1_loss(y_true=target_bbox, y_pred=pred_bbox),
-                    lambda:tf.constant(0.0))
+                   lambda: smooth_l1_loss(y_true=target_bbox, y_pred=pred_bbox),
+                   lambda: tf.constant(0.0))
     loss = tf.reduce_mean(loss)
     return loss
+
 
 def smooth_l1_loss(y_true, y_pred):
     """Implements Smooth-L1 loss.
@@ -239,8 +236,6 @@ def smooth_l1_loss(y_true, y_pred):
     less_than_one = tf.cast(tf.less(diff, 1.0), "float32")
     loss = (less_than_one * 0.5 * diff ** 2) + (1 - less_than_one) * (diff - 0.5)
     return loss
-
-
 
 
 def mrcnn_class_loss_graph(num_class, batch_size, target_class_ids, pred_class_logits,
@@ -257,30 +252,27 @@ def mrcnn_class_loss_graph(num_class, batch_size, target_class_ids, pred_class_l
     # During model building, Keras calls this function with
     # target_class_ids of type float32. Unclear why. Cast it
     # to int to get around it.
-    target_class_ids = tf.cast(target_class_ids, 'int64')
-    print("pred_class_logits_________", pred_class_logits.get_shape())
 
-    pred_class_logits = tf.reshape(pred_class_logits, (batch_size, -1, num_class))
-    print("mrcnn_class_logits____", pred_class_logits.get_shape())
+    pred_class_logits = tf.reshape(pred_class_logits, (batch_size, -1, num_class), name='pred_class_logits_reshape')
 
     # Find predictions of classes that are not in the dataset.
     # 查找不在数据集中的类的预测
     pred_class_ids = tf.argmax(pred_class_logits, axis=2)
     # 更新此行以使用批处理>1。现在，它假定批处理中的所有图像都具有相同的active_class_ids
     pred_active = tf.gather(active_class_ids[0], pred_class_ids)
-    pred_active = tf.cast(pred_active,tf.float32)
+    pred_active = tf.cast(pred_active, tf.float32)
+    target_class_ids=tf.cast(target_class_ids,tf.int32)
+    pred_class_logits = tf.cast(pred_class_logits, tf.float32)
     # Loss （batch，32）
-    loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+    loss = tf.losses.sparse_softmax_cross_entropy(
         labels=target_class_ids, logits=pred_class_logits)
-
     # 消除不在图像的活动类别中的类别的预测的损失。
     loss = loss * pred_active
 
     # 计算loss平均值，仅适用有助于做出预测的预测loss以得到正确的平均值.
-    loss = tf.reduce_sum(loss) / tf.reduce_sum(pred_active)
+    # loss = tf.reduce_sum(loss) / tf.reduce_sum(pred_active)
+    loss = tf.reduce_mean(loss)
     return loss
-
-
 
 
 def rpn_class_loss_graph(rpn_match, rpn_class_logits):
@@ -374,10 +366,6 @@ def generate_rpn_match_and_rpn_bbox_with_batch(gt_class_ids, gt_boxes):
         rpn_match, rpn_bbox = build_rpn_targets(anchors, gt_class_ids[i, :], gt_boxes[i, :, :])
         batch_rpn_match[i] = rpn_match[:, np.newaxis]
         batch_rpn_bbox[i] = rpn_bbox
-        unique = np.unique(rpn_match)
-        print('unique:', unique)
-    print('batch_rpn_match shape', batch_rpn_match.shape)
-    print('batch_rpn_bbox shape', batch_rpn_bbox.shape)
 
     return batch_rpn_match, batch_rpn_bbox
 
@@ -394,9 +382,6 @@ def generate_rpn_match_and_rpn_bbox(gt_class_ids, gt_boxes):
                                              cfg.BACKBONE_STRIDES,
                                              cfg.RPN_ANCHOR_STRIDE)
     rpn_match, rpn_bbox = build_rpn_targets(anchors, gt_class_ids, gt_boxes)
-
-    unique = np.unique(rpn_match)
-    print('unique:', unique)
 
     return rpn_match, rpn_bbox
 

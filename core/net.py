@@ -3,6 +3,7 @@ import numpy as np
 from core.cfg import cfg
 import core.utils as utils
 
+tf.enable_eager_execution()
 
 def resnet(input_image, train_bn=True):
     # 第一层特征
@@ -61,7 +62,7 @@ def rpn_layer(inpute_feature_map,  # 输入的特征，其w与h所围成面积�
                          name='rpn_bbox_pred_' + str(num))
 
     # 将feature_map展开，得到[batch, anchors, 4]
-    rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4))
+    rpn_bbox = tf.reshape(x, (tf.shape(x)[0], -1, 4),name='rpn_box_reshape')
     return [rpn_class_logits, rpn_probs, rpn_bbox]
 
 

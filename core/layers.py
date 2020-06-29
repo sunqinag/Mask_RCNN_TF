@@ -336,7 +336,7 @@ def overlaps_graph(boxes1, boxes2):
     # 平铺boxes2和重复boxes1。 这使我们可以进行比较每个boxes1对每个boxes2都没有循环。
     # tf没有给出np.repeat等接口，因此用tf.title和tf.reshape等效代替
     b1 = tf.reshape(tf.tile(tf.expand_dims(boxes1, 1),
-                            [1, 1, tf.shape(boxes2)[0]]), [-1, 4])
+                            [1, 1, tf.shape(boxes2)[0]]), [-1, 4],name='overlaps_reshape_1')
     b2 = tf.tile(boxes2, [tf.shape(boxes1)[0], 1])
 
     # 寻找交集区域坐标并计算面积
@@ -355,7 +355,7 @@ def overlaps_graph(boxes1, boxes2):
 
     # Compute IoU and reshape to [boxes1, boxes2]
     iou = intersection / union
-    overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])#对应关系，这个iou是box1的第几个对应的box2的第几个
+    overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]],name='overlaps_reshape_2')#对应关系，这个iou是box1的第几个对应的box2的第几个
     return overlaps
 
     # import matplotlib.pyplot as plt

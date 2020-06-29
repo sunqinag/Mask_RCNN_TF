@@ -62,7 +62,7 @@ def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride):
     # 将中心点,边长转化为两个点的坐标。 (y1, x1, y2, x2)
     boxes = np.concatenate([box_centers - 0.5 * box_sizes,
                             box_centers + 0.5 * box_sizes], axis=1)
-    print(boxes[0])  # 因为中心点从0开始。第一个锚点的x1 y1为负数
+    # print(boxes[0])  # 因为中心点从0开始。第一个锚点的x1 y1为负数
 
     return boxes
 
@@ -108,7 +108,7 @@ def generate_anchors_tf(scales, ratios, shape, feature_stride, anchor_stride):
     # 将中心点,边长转化为两个点的坐标。 (y1, x1, y2, x2)
     boxes =tf.concat([box_centers - 0.5 * box_sizes,
                             box_centers + 0.5 * box_sizes], axis=1)
-    print(boxes[0])  # 因为中心点从0开始。第一个锚点的x1 y1为负数
+    # print(boxes[0])  # 因为中心点从0开始。第一个锚点的x1 y1为负数
 
     return boxes
 
@@ -146,9 +146,7 @@ def batch_slice(inputs, graph_fn, batch_size, names=None):
         inputs = [inputs]
 
     outputs = []
-    print("batch_size", batch_size)
     for i in range(batch_size):
-        print(inputs, i)
         inputs_slice = [x[i] for x in inputs]
         output_slice = graph_fn(*inputs_slice)
         if not isinstance(output_slice, (tuple, list)):
